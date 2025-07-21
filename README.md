@@ -1,0 +1,114 @@
+# NAMI 🌊
+
+**N**ode **A**ccess & **M**anipulation **I**nterface is a simple tool for managing connections to multiple remote instances (particularly GPU servers), with built-in GPU monitoring, file transfer capabilities via rsync/S3, and a template system for common tasks.
+
+### Features
+
+- **🔗 Multi-instance SSH management** - Add, list, and connect to remote servers
+- **🌐 Heterogeneous environments** - Works across different Linux distros and cloud providers (Vast, AWS, Runpod, etc.)
+- **📊 GPU monitoring** - GPU utilization and memory tracking
+- **📁 File transfer** - Transfer files between instances directly via rsync or using S3 as intermediary
+- **📜 Template system** - Execute pre-configured bash script templates on remote instances  
+- **⚙️ Configuration management** - Personal and global configuration storage
+
+### Installation
+
+```bash
+pip install -U nami
+```
+
+### Quick Start
+
+```bash
+# Add a remote instance
+nami add gpu-box 192.168.1.100 22 --user ubuntu --description "Main GPU server"
+
+# List all instances with GPU status
+nami list
+
+# Connect to an instance via SSH  
+nami ssh gpu-box
+
+# Run a command on an instance
+nami ssh gpu-box "nvidia-smi"
+
+# Transfer files between instances
+nami transfer --source_instance local --dest_instance gpu-box --source_path ./data --dest_path ~/data
+
+# Upload files to S3 from an instance
+nami to_s3 --source_instance gpu-box --source_path ~/results --dest_path s3://bucket/experiment1/
+
+# Download files from S3 to an instance  
+nami from_s3 --dest_instance gpu-box --source_path s3://bucket/dataset/ --dest_path ~/data/
+
+# Execute a template on an instance
+nami template gpu-box setup_conda --env_name myenv --python_version 3.9
+```
+
+### ⚙️ Configuration
+
+NAMI stores its configuration in `~/.nami/`:
+
+- `config.yaml` - Instance definitions and global settings
+- `personal.yaml` - User-specific configurations (S3 bucket, AWS profile, etc.)
+- `templates/` - Custom bash script templates
+
+### 🔧 Commands
+
+**Instance Management:**
+```bash
+# Add a new instance
+nami add <name> <host> <port> [--user USER] [--local-port PORT] [--description DESC]
+
+# List all instances with GPU status
+nami list
+
+# Remove an instance
+nami remove <name>
+
+# Connect via SSH or run a command
+nami ssh <instance> [command]
+```
+
+**Configuration:**
+```bash
+# Set personal config value
+nami config set <key> <value>
+
+# Show configuration (all or specific key)
+nami config show [key]
+```
+
+**File Transfer:**
+```bash
+# Transfer files between instances
+nami transfer --source_instance SRC --dest_instance DEST \
+              --source_path PATH \
+              [--dest_path PATH] \
+              [--method rsync|s3] \
+              [--exclude PATTERNS] \
+              [--archive] \
+              [--rsync_opts "OPTIONS"]
+
+# Upload to S3
+nami to_s3 --source_instance INSTANCE \
+           --source_path PATH \
+           --dest_path S3_PATH \
+           [--exclude PATTERNS] \
+           [--archive] \
+           [--aws_profile PROFILE]
+
+# Download from S3  
+nami from_s3 --dest_instance INSTANCE \
+             --source_path S3_PATH \
+             --dest_path PATH \
+             [--exclude PATTERNS] \
+             [--archive] \
+             [--aws_profile PROFILE]
+```
+
+**Templates:**
+```bash
+# Execute a template with variables
+nami template <instance> <template_name> [--var1 value1 --var2 value2 ...]
+```

@@ -1,0 +1,27 @@
+# Personal configuration - contains private settings like AWS credentials
+personal.yaml
+
+# User-specific template customizations (optional)
+# Uncomment if you want to keep custom templates private
+# templates/
+
+# Publishing/build scripts and artifacts
+publish.txt
+build/
+dist/
+*.egg-info/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db 

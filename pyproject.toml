@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=61.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nami"
+version = "0.1.0"
+description = "Node Administration Made Intuitive"
+readme = "README.md"
+authors = [
+    {name = "Alexander Lutsenko", email = "lex.lutsenko@gmail.com"},
+]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+keywords = ["ssh", "rsync", "s3", "remote", "administration", "automation"]
+dependencies = [
+    "PyYAML>=6.0",
+    "paramiko>=3.4.0",
+    "sty>=1.0.0",
+]
+requires-python = ">=3.8"
+
+[project.urls]
+"Homepage = "https://github.com/AlexanderLutsenko/nami"
+"Repository" = "https://github.com/AlexanderLutsenko/nami"
+"Bug Tracker" = "https://github.com/AlexanderLutsenko/nami/issues"
+
+[project.scripts]
+nami = "nami.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["nami*"]
+exclude = ["tests*"] 
