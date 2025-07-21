@@ -11,7 +11,7 @@
 - **📜 Template system** - Execute pre-configured bash script templates on remote instances  
 - **⚙️ Configuration management** - Personal and global configuration storage
 
-### Installation
+### Installation <img src="https://img.shields.io/pypi/v/nami-surf?color=blue&style=flat-square">
 
 ```bash
 pip install -U nami-surf
