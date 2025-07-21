@@ -1,4 +1,4 @@
-# NAMI 🌊
+# Nami 🌊
 
 **N**ode **A**ccess & **M**anipulation **I**nterface is a simple tool for managing connections to multiple remote instances (particularly GPU servers), with built-in GPU monitoring, file transfer capabilities via rsync/S3, and a template system for common tasks.
 
@@ -14,7 +14,7 @@
 ### Installation
 
 ```bash
-pip install -U nami
+pip install -U nami-surf
 ```
 
 ### Quick Start

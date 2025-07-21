@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "nami"
+name = "nami-surf"
 version = "0.1.0"
 description = "Node Administration Made Intuitive"
 readme = "README.md"
@@ -24,7 +24,7 @@ dependencies = [
 requires-python = ">=3.8"
 
 [project.urls]
-"Homepage = "https://github.com/AlexanderLutsenko/nami"
+"Homepage" = "https://github.com/AlexanderLutsenko/nami"
 "Repository" = "https://github.com/AlexanderLutsenko/nami"
 "Bug Tracker" = "https://github.com/AlexanderLutsenko/nami/issues"
 

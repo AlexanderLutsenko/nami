@@ -11,9 +11,6 @@ from ..connection import SystemSSHConnection as Connection
 from ..util import build_exclude_flags_s3, build_exclude_flags_zip
 
 
-# The rest of the module mirrors the top-level implementation verbatim
-
-
 def upload_to_s3(*,
                 source_instance: str,
                 source_path: str,
