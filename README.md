@@ -53,6 +53,49 @@ NAMI stores its configuration in `~/.nami/`:
 - `personal.yaml` - User-specific configurations (S3 bucket, AWS profile, etc.)
 - `templates/` - Custom bash script templates
 
+#### Configuration File Structure
+
+**`~/.nami/config.yaml`** - Main configuration file:
+```yaml
+instances:
+  gpu-box:
+    host: "192.168.1.100"
+    port: 22
+    user: "ubuntu"
+    description: "Main GPU server"
+    local_port: 8888  # optional - for SSH tunneling
+  
+  cloud-instance:
+    host: "ec2-xxx.compute.amazonaws.com"
+    port: 22
+    user: "ec2-user"
+    description: "AWS EC2 instance"
+
+variables:
+  # Global template variables available to all templates
+  # var1: value1
+  # ...
+```
+
+**`~/.nami/personal.yaml`** - User-specific settings (excluded from git):
+```yaml
+# S3 configuration for file transfers
+aws_profile: "my-profile"
+s3_bucket: "my-bucket"
+
+aws_access_key_id: XXXX
+aws_secret_access_key: XXXX
+aws_endpoint_url: https://XXXX.com
+
+# Other personal settings
+# ...
+```
+
+**Variable Priority**: Template variables are resolved in this order (highest priority first):
+1. Command-line variables (`--var key=value`)
+2. Personal config (`personal.yaml`)
+3. Global config (`config.yaml` variables section)
+
 ### 🔧 Commands
 
 **Instance Management:**

@@ -14,10 +14,10 @@ This directory contains the default command templates.
 
 ## Template Format
 
-Templates use `${variable_name}` syntax for variable substitution. Variables can be:
-- Defined globally in `config.yaml` under the `variables` section
-- Defined in `personal.yaml` (overrides global config)
-- Passed via `--var key=value` when running templates (highest priority)
+Templates use `${variable_name}` syntax for variable substitution. Variables are resolved in this priority order (highest priority first):
+1. Command-line variables (`--var key=value`) 
+2. Personal config (`personal.yaml`)
+3. Global config (`config.yaml` variables section)
 
 ## Custom Templates
 
