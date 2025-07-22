@@ -74,17 +74,18 @@ $ nami list
 
 #### Instance Management
 ```bash
-# Add a new instance
-nami add <name> <host> <port> [--user USER] [--local-port PORT] [--description DESC]
-
 # List all instances with GPU status
 nami list
+
+# Connect via SSH or run a command
+nami ssh <instance> [command]
+
+# Add a new instance
+nami add <name> <host> <port> [--user USER] [--local-port PORT] [--description DESC]
 
 # Remove an instance
 nami remove <name>
 
-# Connect via SSH or run a command
-nami ssh <instance> [command]
 ```
 
 #### Configuration
