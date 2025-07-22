@@ -45,8 +45,7 @@ nami from_s3 --dest_instance gpu-box --source_path s3://bucket/dataset/ --dest_p
 nami template gpu-box setup_conda --env_name myenv --python_version 3.9
 ```
 
-> Example output:
->
+#### Example output
 ```text
 $ nami list
 
