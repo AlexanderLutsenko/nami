@@ -112,8 +112,10 @@ def transfer_via_s3(*,
     if archive:
         # Always upload a single zip file in archive mode.
         s3_path = f"s3://{s3_bucket}/transfer/{tid}/xfer.zip"
+        is_file = True
     else:
-        if _remote_path_is_file(source_instance, source_path, config):
+        is_file = _remote_path_is_file(source_instance, source_path, config)
+        if is_file:
             src_basename = Path(source_path).name
             s3_path = f"s3://{s3_bucket}/transfer/{tid}/{src_basename}"
         else:
@@ -124,32 +126,37 @@ def transfer_via_s3(*,
     print(f"📦 Archive mode: {archive}")
     print(f"🗂️  Exclude     : {exclude}\n")
 
-    upload_to_s3(
-        source_instance=source_instance,
-        source_path=source_path,
-        dest_path=s3_path,
-        aws_profile=aws_profile,
-        exclude=exclude,
-        archive=archive,
-        operation_id=tid,
-        config=config,
-    )
+    try:
+        upload_to_s3(
+            source_instance=source_instance,
+            source_path=source_path,
+            dest_path=s3_path,
+            aws_profile=aws_profile,
+            exclude=exclude,
+            archive=archive,
+            operation_id=tid,
+            config=config,
+        )
 
-    download_from_s3(
-        dest_instance=dest_instance,
-        source_path=s3_path,
-        dest_path=dest_path,
-        aws_profile=aws_profile,
-        exclude=exclude,
-        archive=archive,
-        operation_id=tid,
-        config=config,
-    )
-
-    if archive:
+        download_from_s3(
+            dest_instance=dest_instance,
+            source_path=s3_path,
+            dest_path=dest_path,
+            aws_profile=aws_profile,
+            exclude=exclude,
+            archive=archive,
+            operation_id=tid,
+            config=config,
+        )
+    finally:
+        # Always attempt cleanup, even if the transfer failed at some point.
         print("🧹 Cleaning up S3 temporary data …")
-        with Connection(dest_instance, config) as dest:
-            dest.run(
-                f'aws --profile {aws_profile} s3 rm "{s3_path}" --recursive'
-            )
-    print("✅ Transfer completed!") 
+        cleanup_prefix = f"s3://{s3_bucket}/transfer/{tid}/"
+        try:
+            with Connection("local", config) as lcl:
+                lcl.run(f'aws --profile {aws_profile} s3 rm "{cleanup_prefix}" --recursive')
+            print("✅ Cleanup completed!")
+        except Exception as e:
+            print(f"⚠️  Cleanup failed: {e}")
+
+    print("✅ Transfer completed!")

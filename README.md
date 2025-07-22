@@ -72,6 +72,12 @@ nami config show [key]
 ```
 
 **File Transfer:**
+
+Nami supports two strategies for moving data between machines:
+
+- **rsync** – Files are copied directly between the two instances over SSH. This is ideal for smaller transfers and, thanks to rsync’s synchronization logic, it will only transmit files that are new or have changed on the source, saving both time and bandwidth.
+- **s3** – Data are first uploaded from the source instance to an S3 bucket and then downloaded to the destination instance. Despite the extra hop, this approach is usually the fastest for large datasets because the upload/download steps can fully saturate network bandwidth and run in parallel.
+
 ```bash
 # Transfer files between instances
 nami transfer --source_instance SRC \
