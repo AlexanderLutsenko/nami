@@ -17,7 +17,7 @@
 pip install -U nami-surf
 ```
 
-### Quick Start
+### 🚀 Quick Start
 
 ```bash
 # Add a remote instance
@@ -45,9 +45,35 @@ nami from_s3 --dest_instance gpu-box --source_path s3://bucket/dataset/ --dest_p
 nami template gpu-box setup_conda --env_name myenv --python_version 3.9
 ```
 
+> Example output:
+>
+```text
+$ nami list
+
+📋 Configured Instances:
+-----------------------------------------------------------------
+🖥️ training-box (✅ Online)
+   SSH: ubuntu@203.0.113.10:2222, local port: 8080
+   Description: Primary training server
+   GPUs:
+     🟢 GPU0:   0% | Mem:   2% | NVIDIA A100 80GB
+     🔴 GPU1: 100% | Mem:  94% | NVIDIA A100 80GB
+     🟠 GPU2:   0% | Mem:  51% | NVIDIA A100 80GB
+
+🖥️ idle-node (✅ Online)
+   SSH: admin@203.0.113.11:2222
+   Description: Spare capacity node
+   GPUs:
+     🟢 GPU0:   0% | Mem:   0% | NVIDIA H100
+
+🖥️ backup-box (❌ Offline)
+   SSH: root@203.0.113.12:2222
+   Description: Cold backup server
+```
+
 ### 🔧 Commands
 
-**Instance Management:**
+#### Instance Management
 ```bash
 # Add a new instance
 nami add <name> <host> <port> [--user USER] [--local-port PORT] [--description DESC]
@@ -62,7 +88,7 @@ nami remove <name>
 nami ssh <instance> [command]
 ```
 
-**Configuration:**
+#### Configuration
 ```bash
 # Set personal config value
 nami config set <key> <value>
@@ -71,7 +97,7 @@ nami config set <key> <value>
 nami config show [key]
 ```
 
-**File Transfer:**
+#### File Transfer
 
 Nami supports two strategies for moving data between machines:
 
@@ -108,7 +134,7 @@ nami from_s3
     [--aws_profile PROFILE]
 ```
 
-**Templates:**
+#### Templates
 ```bash
 # Execute a template with variables
 nami template <instance> <template_name> \
@@ -161,7 +187,8 @@ aws_endpoint_url: https://XXXX.com
 # ...
 ```
 
-**Variable Priority**: Template variables are resolved in this order (highest priority first):
+#### Variable Priority
+Template variables are resolved in this order (highest priority first):
 1. Command-line variables (`--var key=value`)
 2. Personal config (`personal.yaml`)
 3. Global config (`config.yaml` variables section)
