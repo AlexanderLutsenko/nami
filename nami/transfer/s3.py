@@ -1,14 +1,20 @@
 from __future__ import annotations
 
-import argparse
 import datetime
-import os
-import sys
 from pathlib import Path
-from typing import List
 
 from ..connection import SystemSSHConnection as Connection
 from ..util import build_exclude_flags_s3, build_exclude_flags_zip
+
+
+def _remote_path_is_file(instance: str, path: str, cfg: dict | None) -> bool:
+    """Return True if *path* is a file on *instance*, False otherwise."""
+    try:
+        with Connection(instance, cfg) as conn:
+            conn.run(f'test -f "{path}"')
+        return True
+    except RuntimeError:
+        return False
 
 
 def upload_to_s3(*,
@@ -34,8 +40,19 @@ def upload_to_s3(*,
         else:
             print("🔼 Uploading to S3 …")
             aws_exclude_flags = build_exclude_flags_s3(exclude)
+            # If the source path points to a directory we use `aws s3 sync`, otherwise fall back to `aws s3 cp`
+            # This allows transferring both directories and single files.
             src.run(
-                f'aws --profile {aws_profile} s3 sync "{source_path}" "{dest_path}" {aws_exclude_flags}'
+                f'''
+                if [ -d "{source_path}" ]; then
+                    aws --profile {aws_profile} s3 sync "{source_path}" "{dest_path}" {aws_exclude_flags}
+                elif [ -f "{source_path}" ]; then
+                    aws --profile {aws_profile} s3 cp "{source_path}" "{dest_path}"
+                else
+                    echo "❌ Source path does not exist: {source_path}" >&2
+                    exit 1
+                fi
+                '''
             )
         print("✅ Upload completed!")
 
@@ -68,7 +85,9 @@ def download_from_s3(*,
             aws_exclude_flags = build_exclude_flags_s3(exclude)
             dest.run(
                 f'''
-                mkdir -p "{dest_path}"
+                mkdir -p "$(dirname "{dest_path}")" || true
+                # Attempt to copy as a single file first; if that fails, fallback to sync for directories.
+                aws --profile {aws_profile} s3 cp "{source_path}" "{dest_path}" || \
                 aws --profile {aws_profile} s3 sync "{source_path}" "{dest_path}" {aws_exclude_flags}
                 '''
             )
@@ -88,9 +107,17 @@ def transfer_via_s3(*,
                     config: dict = None
                     ) -> None:
     tid = operation_id or int(datetime.datetime.utcnow().timestamp())
-    s3_path = f"s3://{s3_bucket}/transfer/{tid}/"
+
+    # Decide whether the given source path is a file or directory **on the remote source instance**.
     if archive:
-        s3_path += "xfer.zip"
+        # Always upload a single zip file in archive mode.
+        s3_path = f"s3://{s3_bucket}/transfer/{tid}/xfer.zip"
+    else:
+        if _remote_path_is_file(source_instance, source_path, config):
+            src_basename = Path(source_path).name
+            s3_path = f"s3://{s3_bucket}/transfer/{tid}/{src_basename}"
+        else:
+            s3_path = f"s3://{s3_bucket}/transfer/{tid}/"
 
     print("──────────── Transfer Context ────────────")
     print(f"🚚 Transfer ID : {tid}")

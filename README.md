@@ -74,40 +74,44 @@ nami config show [key]
 **File Transfer:**
 ```bash
 # Transfer files between instances
-nami transfer --source_instance SRC --dest_instance DEST \
-              --source_path PATH \
-              [--dest_path PATH] \
-              [--method rsync|s3] \
-              [--exclude PATTERNS] \
-              [--archive] \
-              [--rsync_opts "OPTIONS"]
+nami transfer --source_instance SRC \
+    --dest_instance DEST \
+    --source_path PATH \
+    [--dest_path PATH] \
+    [--method rsync|s3] \
+    [--exclude PATTERNS] \
+    [--archive] \
+    [--rsync_opts "OPTIONS"]
 
 # Upload to S3
-nami to_s3 --source_instance INSTANCE \
-           --source_path PATH \
-           --dest_path S3_PATH \
-           [--exclude PATTERNS] \
-           [--archive] \
-           [--aws_profile PROFILE]
+nami to_s3 \
+    --source_instance INSTANCE \
+    --source_path PATH \
+    --dest_path S3_PATH \
+    [--exclude PATTERNS] \
+    [--archive] \
+    [--aws_profile PROFILE]
 
 # Download from S3  
-nami from_s3 --dest_instance INSTANCE \
-             --source_path S3_PATH \
-             --dest_path PATH \
-             [--exclude PATTERNS] \
-             [--archive] \
-             [--aws_profile PROFILE]
+nami from_s3 
+    --dest_instance INSTANCE \
+    --source_path S3_PATH \
+    --dest_path PATH \
+    [--exclude PATTERNS] \
+    [--archive] \
+    [--aws_profile PROFILE]
 ```
 
 **Templates:**
 ```bash
 # Execute a template with variables
-nami template <instance> <template_name> [--var1 value1 --var2 value2 ...]
+nami template <instance> <template_name> \
+    [--var1 value1 --var2 value2 ...]
 ```
 
 ### ⚙️ Configuration
 
-NAMI stores its configuration in `~/.nami/`:
+Nami stores its configuration in `~/.nami/`:
 
 - `config.yaml` - Instance definitions and global settings
 - `personal.yaml` - User-specific configurations (S3 bucket, AWS profile, etc.)
