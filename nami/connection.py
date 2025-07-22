@@ -4,6 +4,7 @@ import textwrap
 from sty import fg, rs, bg
 import subprocess
 import os
+import sys
 
 CHUNK_SIZE = 32*1024
 
@@ -85,7 +86,6 @@ class SSHConnection:
             raise RuntimeError(f"Remote command failed with exit {exit_status}.")
 
     def run_interactive(self):
-        import sys
         import termios
         import tty
         import select
