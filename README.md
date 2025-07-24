@@ -48,7 +48,7 @@ nami to_s3 --source_instance gpu-box --source_path ~/results --dest_path s3://bu
 nami from_s3 --dest_instance gpu-box --source_path s3://bucket/dataset/ --dest_path ~/data/
 
 # Execute a template on an instance
-nami template gpu-box setup_conda --env_name myenv --python_version 3.9
+nami template gpu-box setup_conda
 ```
 
 #### Example output
