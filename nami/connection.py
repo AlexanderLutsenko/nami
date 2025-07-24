@@ -1,5 +1,4 @@
 from __future__ import annotations
-import paramiko
 import textwrap
 from sty import fg, rs, bg
 import subprocess
@@ -9,134 +8,33 @@ import sys
 CHUNK_SIZE = 32*1024
 
 
-class SSHConnection:
-
-    def __init__(self, instance_name: str, config: dict):
-        instance_conf = config.get("instances", {}).get(instance_name, None)
-        if not instance_conf:
-            print(f"❌ Instance not found: {instance_name}")
-            raise KeyError(f"Instance not found: {instance_name}")
-
-        self.instance_name = instance_name
-
-        self.host = instance_conf["host"]
-        self.port = instance_conf.get("port", 22)
-        self.user = instance_conf.get("user", "root")
-        self.key_filename = instance_conf.get("ssh_key", None)
-
-        self.client = paramiko.SSHClient()
-        self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        print(f"🔗 Establishing SSH connection to {instance_name} ({self.user}@{self.host}:{self.port}) …")
-        self.connect()
-
-    def connect(self):
-        self.client.connect(
-            hostname=self.host,
-            username=self.user,
-            port=self.port,
-            key_filename=self.key_filename,
-            allow_agent=True,    # Enable SSH agent authentication
-        )
-
-    def run(self, cmd: str):
-        """Execute *cmd* on *ssh*, stream stdout+stderr to console."""
-
-        # get_pty=True is crucial for seeing real-time output from commands
-        # that buffer their output when not run in an interactive terminal.
-        cmd = textwrap.dedent(cmd).strip()
-        # Nicely colored command and status output
-        print(f"{fg.cyan}{cmd}{rs.all}")
-
-        # Use 'bash -c' to execute the command string.
-        cmd = f"bash -c 'set +m; set -e -o pipefail; {cmd}'"
-        stdin, stdout, stderr = self.client.exec_command(cmd, get_pty=True)
-
-        import time
-
-        channel = stdout.channel
-        output_chunks: list[str] = []
-
-        while True:
-            received_any = False
-
-            if channel.recv_ready():
-                data: bytes = channel.recv(CHUNK_SIZE)
-                if data:
-                    text = data.decode(errors="replace")
-                    print(text, end="", flush=True)
-                    output_chunks.append(text)
-                    received_any = True
-
-            if channel.recv_stderr_ready():
-                data: bytes = channel.recv_stderr(CHUNK_SIZE)
-                if data:
-                    text = data.decode(errors="replace")
-                    print(text, end="", flush=True)
-                    output_chunks.append(text)
-                    received_any = True
-
-            if channel.exit_status_ready() and not (channel.recv_ready() or channel.recv_stderr_ready()):
-                break
-
-            if not received_any:
-                time.sleep(0.01)
-
-        exit_status = channel.recv_exit_status()
-        if exit_status != 0:
-            raise RuntimeError(f"Remote command failed with exit {exit_status}.")
-
-    def run_interactive(self):
-        import termios
-        import tty
-        import select
-
-        chan = self.client.invoke_shell()
-        old_tty = termios.tcgetattr(sys.stdin)
-
-        try:
-            tty.setraw(sys.stdin.fileno())
-            tty.setcbreak(sys.stdin.fileno())
-            chan.settimeout(0.0)
-
-            while True:
-                r, _, _ = select.select([chan, sys.stdin], [], [])
-
-                if chan in r:
-                    try:
-                        data = chan.recv(CHUNK_SIZE)
-                    except Exception:
-                        break
-
-                    if not data:
-                        break
-
-                    sys.stdout.write(data.decode(errors="replace"))
-                    sys.stdout.flush()
-
-                if sys.stdin in r:
-                    data = sys.stdin.read(1)
-                    if not data:
-                        break
-                    chan.send(data)
-
-        finally:
-            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_tty)
-            chan.close()
-
-    def __enter__(self):
-        return self
-    
-    def __exit__(self, exc_type, exc_value, traceback):
-        self.close()
-
-    def close(self):
-        self.client.close()
-
-
 class SystemSSHConnection:
-    """Lightweight SSH helper that shells out to the local ``ssh`` binary."""
+    """Lightweight SSH helper that shells out to the local ``ssh`` binary.
 
-    def __init__(self, instance_name: str, config: dict):
+    Parameters
+    ----------
+    instance_name: str
+        Name of the instance to connect to.
+    config: dict
+        Full Nami configuration (``config.yaml``) so the connection can look up
+        instance details.
+    enable_port_forwarding: bool | int, optional
+        Controls local port forwarding behaviour.
+
+        * ``False`` (default) – no port forwarding.
+        * ``True`` – forward the port configured for the instance in
+          ``config.yaml`` (``local_port`` field).
+        * ``<int>`` – forward **this** port instead of the one from the
+          instance configuration.  This is handy when you want to temporarily
+          override the default port from the CLI via ``--forward 9000`` for
+          example.
+
+        Port forwarding is disabled by default so that non-interactive
+        operations (rsync, S3 sync, etc.) don’t hang when the local port is
+        already occupied.
+    """
+
+    def __init__(self, instance_name: str, config: dict, *, enable_port_forwarding: bool | int = False):
         instance_conf = config.get("instances", {}).get(instance_name, {})
         self.is_local = instance_name == "local" or instance_conf.get("host") in {"127.0.0.1", "localhost"}
         self.instance_name = instance_name
@@ -156,10 +54,24 @@ class SystemSSHConnection:
         self.host = instance_conf["host"]
         self.port = instance_conf.get("port", 22)
         self.user = instance_conf.get("user", "root")
-        self.local_port = instance_conf.get("local_port", None)
+
+        # Determine which (if any) local port should be forwarded.
+        if isinstance(enable_port_forwarding, int):
+            # An explicit port was provided via the CLI (``--forward 9000``).
+            self.local_port = enable_port_forwarding
+            _forward_requested = True
+        elif enable_port_forwarding is False:
+            # No forwarding requested.
+            self.local_port = instance_conf.get("local_port", None)
+            _forward_requested = False
+        else:
+            # ``True`` or ``None`` – forward the port from the configuration.
+            self.local_port = instance_conf.get("local_port", None)
+            _forward_requested = True
 
         self._base_cmd: list[str] = ["ssh", f"-p{self.port}"]
-        if self.local_port:
+        # Add port-forwarding only when explicitly requested and a port is available.
+        if self.local_port and _forward_requested:
             self._base_cmd.extend(["-L", f"{self.local_port}:localhost:{self.local_port}"])
         self._base_cmd.append("-A")
         self._base_cmd.append(f"{self.user}@{self.host}")

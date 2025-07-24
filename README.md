@@ -32,6 +32,12 @@ nami ssh gpu-box
 # Run a command on an instance
 nami ssh gpu-box "nvidia-smi"
 
+# Forward an instance’s configured port (e.g. Jupyter on 8888) to localhost
+nami ssh gpu-box --forward
+
+# Forward an arbitrary local port (override the one in config)
+nami ssh gpu-box --forward 9000
+
 # Transfer files between instances
 nami transfer --source_instance local --dest_instance gpu-box --source_path ./data --dest_path ~/data
 
@@ -78,7 +84,7 @@ $ nami list
 nami list
 
 # Connect via SSH or run a command
-nami ssh <instance> [command]
+nami ssh <instance> [command] [--forward [PORT]]
 
 # Add a new instance
 nami add <name> <host> <port> [--user USER] [--local-port PORT] [--description DESC]
@@ -173,7 +179,7 @@ variables:
   # ...
 ```
 
-**`~/.nami/personal.yaml`** - User-specific settings (excluded from git):
+**`~/.nami/personal.yaml`** - User-specific settings:
 ```yaml
 # S3 configuration for file transfers
 aws_profile: "my-profile"

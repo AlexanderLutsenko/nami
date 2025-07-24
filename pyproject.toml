@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nami-surf"
-version = "0.1.3"
+version = "0.1.5"
 description = "Node Administration Made Intuitive"
 readme = "README.md"
 authors = [
@@ -18,7 +18,6 @@ classifiers = [
 keywords = ["ssh", "rsync", "s3", "remote", "administration", "automation"]
 dependencies = [
     "PyYAML>=6.0",
-    "paramiko>=3.4.0",
     "sty>=1.0.0",
 ]
 requires-python = ">=3.8"

@@ -178,14 +178,28 @@ class Nami():
             with open(user_template_path, 'r') as f:
                 return f.read()
         
-        # If not found, check default templates directory within the package
-        script_dir = Path(__file__).parent  # nami package directory
-        default_template_path = script_dir / "default_templates" / template_filename
-        if default_template_path.exists():
-            with open(default_template_path, 'r') as f:
+        # If not found, check default templates directory that ships with the
+        # *installed* package (inside ``nami/default_templates``).
+        script_dir = Path(__file__).parent  # .../nami
+        pkg_default_path = script_dir / "default_templates" / template_filename
+        if pkg_default_path.exists():
+            with open(pkg_default_path, 'r') as f:
                 return f.read()
-        
-        raise FileNotFoundError(f"Template '{template_name}' not found in user templates ({user_template_path}) or default templates ({default_template_path})")
+
+        # Finally, look for default_templates at the project root directory.
+        # This layout appears when Nami is installed in *editable* mode:
+        #   project_root/
+        #       nami/                 <- package
+        #       default_templates/    <- alongside the package
+        repo_default_path = script_dir.parent / "default_templates" / template_filename
+        if repo_default_path.exists():
+            with open(repo_default_path, 'r') as f:
+                return f.read()
+
+        raise FileNotFoundError(
+            f"Template '{template_name}' not found in user templates ({user_template_path}), "
+            f"package defaults ({pkg_default_path}), or project defaults ({repo_default_path})"
+        )
 
     def render_template(self, template_content, variables):
         """Render a template with variables."""
@@ -236,14 +250,30 @@ class Nami():
             print(e)
             return False
 
-    def run_ssh_command(self, instance_name, command):
-        """Execute a command on an instance via SSH."""
-        with Connection(instance_name, self.config) as ssh:
+    def run_ssh_command(self, instance_name, command, forward=False):
+        """Execute a command on an instance via SSH.
+
+        Parameters
+        ----------
+        instance_name: str
+            Target instance name as configured in ``config.yaml``.
+        command: str
+            Shell command to execute remotely.  If *None*, an interactive shell
+            will be opened (see ``connect_ssh``).
+        forward: bool, optional
+            When ``True`` the instance's ``local_port`` value is forwarded via
+            ``ssh -L``.  By default no port forwarding is performed.
+        """
+        with Connection(instance_name, self.config, enable_port_forwarding=forward) as ssh:
             ssh.run(command)
 
-    def connect_ssh(self, instance_name, command=None):
-        """Connect to an instance via SSH."""
-        with Connection(instance_name, self.config) as ssh:
+    def connect_ssh(self, instance_name, command=None, forward=False):
+        """Open an interactive SSH session to *instance_name*.
+
+        If *forward* is ``True`` the configured ``local_port`` will be
+        forwarded.
+        """
+        with Connection(instance_name, self.config, enable_port_forwarding=forward) as ssh:
             ssh.run_interactive(command)
 
     def get_gpu_info(self, name):
@@ -326,6 +356,14 @@ def main():
     ssh_parser = subparsers.add_parser("ssh", help="Run SSH command on instance")
     ssh_parser.add_argument("instance", help="Instance name")
     ssh_parser.add_argument("ssh_command", nargs="?", help="Command to run on the remote host (if not provided, opens interactive shell)")
+    ssh_parser.add_argument(
+        "--forward",
+        nargs="?",               # optional value
+        const=None,               # flag present without value ⇒ use configured port
+        default=False,            # flag absent ⇒ no forwarding
+        type=int,                 # when provided, treat as int port
+        help="Enable port forwarding (optionally specify local port number, e.g. --forward 9000)",
+    )
     
     config_parser = subparsers.add_parser("config", help="Manage personal configuration")
     config_subparsers = config_parser.add_subparsers(dest="config_action", help="Config actions")
@@ -394,9 +432,9 @@ def main():
         vm.remove_instance(args.name)
     elif args.command == "ssh":
         if args.ssh_command:
-            vm.run_ssh_command(args.instance, args.ssh_command)
+            vm.run_ssh_command(args.instance, args.ssh_command, forward=args.forward)
         else:
-            vm.connect_ssh(args.instance)
+            vm.connect_ssh(args.instance, forward=args.forward)
     elif args.command == "config":
         if args.config_action == "set":
             vm.set_personal_config(args.key, args.value)
