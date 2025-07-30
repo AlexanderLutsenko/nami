@@ -31,10 +31,15 @@ def upload_to_s3(*,
         if archive:
             print("🔼 Uploading to S3 via ZIP archive …")
             zip_exclude_flags = build_exclude_flags_zip(exclude)
+            # Split the source path into directory and item name so we can zip either single files or directories gracefully.
+            src_dir = Path(source_path.rstrip("/")).parent or Path(".")
+            item_name = Path(source_path.rstrip("/")).name
+            # We first change to the source directory and then create a zip archive that contains the *item_name* only. This
+            # works both for directories and single files.
             src.run(
                 f'''
-                cd "{source_path}"
-                zip -r -0 - . {zip_exclude_flags} | aws --profile {aws_profile} s3 cp - "{dest_path}"
+                cd "{src_dir}"
+                zip -r -0 - "{item_name}" {zip_exclude_flags} | aws --profile {aws_profile} s3 cp - "{dest_path}"
                 '''
             )
         else:
@@ -72,11 +77,15 @@ def download_from_s3(*,
             print("🔽 Downloading from S3 via ZIP archive & extracting …")
             tid = operation_id or int(datetime.datetime.utcnow().timestamp())
             remote_zip_path = f"/tmp/xfer_{tid}.zip"
+            # Determine where to extract the archive. For single files, we unzip into the parent directory so that
+            # the file ends up at the exact *dest_path*. For directories the behaviour is the same: we create the parent
+            # directory (if necessary) and extract the archive inside it.
+            dest_parent = Path(dest_path.rstrip("/")).parent or Path(".")
             dest.run(
                 f'''
                 aws --profile {aws_profile} s3 cp "{source_path}" {remote_zip_path}
-                mkdir -p "{dest_path}"
-                unzip -o {remote_zip_path} -d "{dest_path}"
+                mkdir -p "{dest_parent}"
+                unzip -o {remote_zip_path} -d "{dest_parent}"
                 rm {remote_zip_path}
                 '''
             )

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nami-surf"
-version = "0.1.5"
+version = "0.1.6"
 description = "Node Administration Made Intuitive"
 readme = "README.md"
 authors = [
@@ -26,6 +26,12 @@ requires-python = ">=3.8"
 "Homepage" = "https://github.com/AlexanderLutsenko/nami"
 "Repository" = "https://github.com/AlexanderLutsenko/nami"
 "Bug Tracker" = "https://github.com/AlexanderLutsenko/nami/issues"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.package-data]
+"nami" = ["default_templates/**/*"]
 
 [project.scripts]
 nami = "nami.cli:main"
