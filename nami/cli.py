@@ -186,19 +186,9 @@ class Nami():
             with open(pkg_default_path, 'r') as f:
                 return f.read()
 
-        # Finally, look for default_templates at the project root directory.
-        # This layout appears when Nami is installed in *editable* mode:
-        #   project_root/
-        #       nami/                 <- package
-        #       default_templates/    <- alongside the package
-        repo_default_path = script_dir.parent / "default_templates" / template_filename
-        if repo_default_path.exists():
-            with open(repo_default_path, 'r') as f:
-                return f.read()
-
         raise FileNotFoundError(
-            f"Template '{template_name}' not found in user templates ({user_template_path}), "
-            f"package defaults ({pkg_default_path}), or project defaults ({repo_default_path})"
+            f"Template '{template_name}' not found in user templates ({user_template_path}) or "
+            f"package defaults ({pkg_default_path})"
         )
 
     def render_template(self, template_content, variables):
