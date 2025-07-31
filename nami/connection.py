@@ -94,7 +94,7 @@ class SystemSSHConnection:
         print(f"🔗 Establishing SSH connection to {self.instance_name} ({self.user}@{self.host}:{self.port}) …")
         import signal
         cmd_clean = textwrap.dedent(command).strip()
-        remote_cmd = f"bash -c 'set +m; set -e -o pipefail; {cmd_clean}'"
+        remote_cmd = f"bash -i -c 'set +m; set -e -o pipefail; {cmd_clean}'"
         full_cmd = ["ssh", "-tt"] + self._base_cmd[1:] + [remote_cmd]
         print(f"{fg.cyan}{remote_cmd}{rs.all}")
         proc = subprocess.Popen(full_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=0)
