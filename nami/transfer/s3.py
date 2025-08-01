@@ -25,9 +25,12 @@ def upload_to_s3(*,
                 exclude: str = "",
                 archive: bool = False,
                 operation_id: int | None = None,
+                endpoint: str | None = None,
                 config: dict = None,
                 ) -> None:
     with Connection(source_instance, config) as src:
+        endpoint_flag = f' --endpoint-url "{endpoint}"' if endpoint else ""
+
         if archive:
             print("🔼 Uploading to S3 via ZIP archive …")
             zip_exclude_flags = build_exclude_flags_zip(exclude)
@@ -39,7 +42,7 @@ def upload_to_s3(*,
             src.run(
                 f'''
                 cd "{src_dir}"
-                zip -r -0 - "{item_name}" {zip_exclude_flags} | aws --profile {aws_profile} s3 cp - "{dest_path}"
+                zip -r -0 - "{item_name}" {zip_exclude_flags} | aws --profile {aws_profile}{endpoint_flag} s3 cp - "{dest_path}"
                 '''
             )
         else:
@@ -50,9 +53,9 @@ def upload_to_s3(*,
             src.run(
                 f'''
                 if [ -d "{source_path}" ]; then
-                    aws --profile {aws_profile} s3 sync "{source_path}" "{dest_path}" {aws_exclude_flags}
+                    aws --profile {aws_profile}{endpoint_flag} s3 sync "{source_path}" "{dest_path}" {aws_exclude_flags}
                 elif [ -f "{source_path}" ]; then
-                    aws --profile {aws_profile} s3 cp "{source_path}" "{dest_path}"
+                    aws --profile {aws_profile}{endpoint_flag} s3 cp "{source_path}" "{dest_path}"
                 else
                     echo "❌ Source path does not exist: {source_path}" >&2
                     exit 1
@@ -70,9 +73,12 @@ def download_from_s3(*,
                     exclude: str = "",
                     archive: bool = False,
                     operation_id: int | None = None,
+                    endpoint: str | None = None,
                     config: dict = None,
                     ) -> None:
     with Connection(dest_instance, config) as dest:
+        endpoint_flag = f' --endpoint-url "{endpoint}"' if endpoint else ""
+
         if archive:
             print("🔽 Downloading from S3 via ZIP archive & extracting …")
             tid = operation_id or int(datetime.datetime.utcnow().timestamp())
@@ -83,7 +89,7 @@ def download_from_s3(*,
             dest_parent = Path(dest_path.rstrip("/")).parent or Path(".")
             dest.run(
                 f'''
-                aws --profile {aws_profile} s3 cp "{source_path}" {remote_zip_path}
+                aws --profile {aws_profile}{endpoint_flag} s3 cp "{source_path}" {remote_zip_path}
                 mkdir -p "{dest_parent}"
                 unzip -o {remote_zip_path} -d "{dest_parent}"
                 rm {remote_zip_path}
@@ -96,8 +102,8 @@ def download_from_s3(*,
                 f'''
                 mkdir -p "$(dirname "{dest_path}")" || true
                 # Attempt to copy as a single file first; if that fails, fallback to sync for directories.
-                aws --profile {aws_profile} s3 cp "{source_path}" "{dest_path}" || \
-                aws --profile {aws_profile} s3 sync "{source_path}" "{dest_path}" {aws_exclude_flags}
+                aws --profile {aws_profile}{endpoint_flag} s3 cp "{source_path}" "{dest_path}" || \
+                aws --profile {aws_profile}{endpoint_flag} s3 sync "{source_path}" "{dest_path}" {aws_exclude_flags}
                 '''
             )
         print("✅ Download completed!")
@@ -113,6 +119,7 @@ def transfer_via_s3(*,
                     exclude: str = "",
                     archive: bool = False,
                     operation_id: int | None = None,
+                    endpoint: str | None = None,
                     config: dict = None
                     ) -> None:
     tid = operation_id or int(datetime.datetime.utcnow().timestamp())
@@ -144,6 +151,7 @@ def transfer_via_s3(*,
             exclude=exclude,
             archive=archive,
             operation_id=tid,
+            endpoint=endpoint,
             config=config,
         )
 
@@ -155,6 +163,7 @@ def transfer_via_s3(*,
             exclude=exclude,
             archive=archive,
             operation_id=tid,
+            endpoint=endpoint,
             config=config,
         )
     finally:
@@ -163,7 +172,8 @@ def transfer_via_s3(*,
         cleanup_prefix = f"s3://{s3_bucket}/transfer/{tid}/"
         try:
             with Connection("local", config) as lcl:
-                lcl.run(f'aws --profile {aws_profile} s3 rm "{cleanup_prefix}" --recursive')
+                endpoint_flag = f' --endpoint-url "{endpoint}"' if endpoint else ""
+                lcl.run(f'aws --profile {aws_profile}{endpoint_flag} s3 rm "{cleanup_prefix}" --recursive')
             print("✅ Cleanup completed!")
         except Exception as e:
             print(f"⚠️  Cleanup failed: {e}")

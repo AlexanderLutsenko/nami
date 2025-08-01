@@ -375,6 +375,7 @@ def main():
     transfer_parser.add_argument("--exclude", dest="exclude_patterns", help="Comma-separated patterns to exclude when syncing")
     transfer_parser.add_argument("--archive", action="store_true", help="Archive mode (ZIP)")
     transfer_parser.add_argument("--rsync_opts", default="-avz --progress", help="Extra rsync options")
+    transfer_parser.add_argument("--endpoint", help="Custom S3 endpoint URL")
 
     # Download from S3
     from_s3_parser = subparsers.add_parser("from_s3", help="Download files/folders from S3 to an instance")
@@ -384,6 +385,7 @@ def main():
     from_s3_parser.add_argument("--exclude", dest="exclude_patterns")
     from_s3_parser.add_argument("--archive", action="store_true")
     from_s3_parser.add_argument("--aws_profile")
+    from_s3_parser.add_argument("--endpoint", help="Custom S3 endpoint URL")
 
     # Upload to S3
     to_s3_parser = subparsers.add_parser("to_s3", help="Upload files/folders from an instance to S3")
@@ -393,6 +395,7 @@ def main():
     to_s3_parser.add_argument("--exclude", dest="exclude_patterns")
     to_s3_parser.add_argument("--archive", action="store_true")
     to_s3_parser.add_argument("--aws_profile")
+    to_s3_parser.add_argument("--endpoint", help="Custom S3 endpoint URL")
 
     # Template command
     template_parser = subparsers.add_parser("template", help="Execute a template on an instance")
@@ -459,6 +462,7 @@ def main():
                 aws_profile=vm.personal_config.get("aws_profile", "default"),
                 exclude=args.exclude_patterns or "",
                 archive=args.archive,
+                endpoint=args.endpoint,
                 config=vm.config,
             )
     elif args.command == "from_s3":
@@ -469,6 +473,7 @@ def main():
             aws_profile=args.aws_profile or vm.personal_config.get("aws_profile", "default"),
             exclude=args.exclude_patterns or "",
             archive=args.archive,
+            endpoint=args.endpoint,
             config=vm.config,
         )
     elif args.command == "to_s3":
@@ -479,6 +484,7 @@ def main():
             aws_profile=args.aws_profile or vm.personal_config.get("aws_profile", "default"),
             exclude=args.exclude_patterns or "",
             archive=args.archive,
+            endpoint=args.endpoint,
             config=vm.config,
         )
     elif args.command == "template":
