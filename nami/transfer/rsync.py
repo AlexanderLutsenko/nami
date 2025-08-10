@@ -34,6 +34,10 @@ def transfer_via_rsync(*,
         if src.is_local and dest.is_local:
             raise ValueError("Both endpoints cannot be local. One side must be remote.")
 
+        # Build SSH -p flag snippets once for each endpoint
+        ssh_p_src = f"-p {src.port}" if src.port is not None else ""
+        ssh_p_dest = f"-p {dest.port}" if dest.port is not None else ""
+
         if archive:
             remote_zip_path = f"/tmp/xfer_{tid}.zip"
             zip_exclude_flags = build_exclude_flags_zip(exclude)
@@ -46,11 +50,11 @@ def transfer_via_rsync(*,
 
             if dest.is_local:
                 dest.run(
-                    f'rsync {rsync_opts} -e "ssh -p {src.port}" {src.user}@{src.host}:"{remote_zip_path}" "{remote_zip_path}"'
+                    f'rsync {rsync_opts} -e "ssh {ssh_p_src}" {src.user}@{src.host}:"{remote_zip_path}" "{remote_zip_path}"'
                 )
             else:
                 src.run(
-                    f'rsync {rsync_opts} -e "ssh -p {dest.port}" "{remote_zip_path}" {dest.user}@{dest.host}:"{remote_zip_path}"'
+                    f'rsync {rsync_opts} -e "ssh {ssh_p_dest}" "{remote_zip_path}" {dest.user}@{dest.host}:"{remote_zip_path}"'
                 )
 
             src.run(f'rm -f "{remote_zip_path}"')
@@ -63,11 +67,11 @@ def transfer_via_rsync(*,
         else:
             if dest.is_local:
                 dest.run(
-                    f'rsync {rsync_opts} {exclude_flags} -e "ssh -p {src.port}" {src.user}@{src.host}:"{source_path}" "{dest_path}"'
+                    f'rsync {rsync_opts} {exclude_flags} -e "ssh {ssh_p_src}" {src.user}@{src.host}:"{source_path}" "{dest_path}"'
                 )
             else:
                 src.run(
-                    f'rsync {rsync_opts} {exclude_flags} -e "ssh -p {dest.port}" "{source_path}" {dest.user}@{dest.host}:"{dest_path}"'
+                    f'rsync {rsync_opts} {exclude_flags} -e "ssh {ssh_p_dest}" "{source_path}" {dest.user}@{dest.host}:"{dest_path}"'
                 )
 
         print("✅ Transfer completed!") 

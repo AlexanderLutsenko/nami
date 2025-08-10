@@ -155,12 +155,17 @@ class Nami():
             config, status, gpu_info_lines = instance_results[name]
             
             print(f"🖥️  {name} ({status})")
-            print(f"   SSH: {config['user']}@{config['host']}:{config['port']}, local port: {config.get('local_port', 'N/A')}")
+            port_display = config.get('port')
+            port_str = f":{port_display}" if port_display is not None else ""
+            print(f"   SSH: {config['user']}@{config['host']}{port_str}, local port: {config.get('local_port', 'N/A')}")
             if config.get('local_port', None):
                 local_port = f"-L {config['local_port']}:localhost:{config['local_port']}"
             else:
                 local_port = ""
-            print(f"   Command: ssh -p {config['port']} {config['user']}@{config['host']} {local_port}")
+            if port_display is not None:
+                print(f"   Command: ssh -p {port_display} {config['user']}@{config['host']} {local_port}")
+            else:
+                print(f"   Command: ssh {config['user']}@{config['host']} {local_port}")
             if config.get('description'):
                 print(f"   Description: {config['description']}")
             print("   GPUs:")
@@ -274,11 +279,16 @@ class Nami():
         config = self.config["instances"][name]
         try:
             # Run nvidia-smi to get GPU information
-            result = subprocess.run([
+            ssh_cmd = [
                 "ssh", "-o", "ConnectTimeout=5", "-o", "BatchMode=yes",
-                f"-p{config['port']}", f"{config['user']}@{config['host']}", 
+            ]
+            if config.get('port') is not None:
+                ssh_cmd.append(f"-p{config['port']}")
+            ssh_cmd.extend([
+                f"{config['user']}@{config['host']}",
                 "nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits 2>/dev/null || echo 'NO_GPU'"
-            ], capture_output=True, text=True, timeout=10)
+            ])
+            result = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=10)
             
             if result.returncode != 0:
                 return ["❌ SSH Failed"]

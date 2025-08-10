@@ -185,7 +185,7 @@ home_dir: "/workspace/<username>"
 
 s3_bucket: "<username>"
 
-aws_profile: "<username>"
+aws_profile: "my-profile"
 aws_access_key_id: XXXX
 aws_secret_access_key: XXXX
 aws_endpoint_url: https://XXXX.com

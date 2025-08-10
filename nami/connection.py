@@ -52,7 +52,8 @@ class SystemSSHConnection:
             raise KeyError(f"Instance not found: {instance_name}")
 
         self.host = instance_conf["host"]
-        self.port = instance_conf.get("port", 22)
+        # Only use an explicit SSH port when provided. If missing/None, omit -p.
+        self.port = instance_conf.get("port")
         self.user = instance_conf.get("user", "root")
 
         # Determine which (if any) local port should be forwarded.
@@ -69,7 +70,9 @@ class SystemSSHConnection:
             self.local_port = instance_conf.get("local_port", None)
             _forward_requested = True
 
-        self._base_cmd: list[str] = ["ssh", f"-p{self.port}"]
+        self._base_cmd: list[str] = ["ssh"]
+        if self.port is not None:
+            self._base_cmd.append(f"-p{self.port}")
         # Add port-forwarding only when explicitly requested and a port is available.
         if self.local_port and _forward_requested:
             self._base_cmd.extend(["-L", f"{self.local_port}:localhost:{self.local_port}"])
@@ -91,7 +94,10 @@ class SystemSSHConnection:
                 raise RuntimeError(f"Local command failed with exit {result.returncode}.")
             return result
 
-        print(f"🔗 Establishing SSH connection to {self.instance_name} ({self.user}@{self.host}:{self.port}) …")
+        if self.port is not None:
+            print(f"🔗 Establishing SSH connection to {self.instance_name} ({self.user}@{self.host}:{self.port}) …")
+        else:
+            print(f"🔗 Establishing SSH connection to {self.instance_name} ({self.user}@{self.host}) …")
         import signal
         cmd_clean = textwrap.dedent(command).strip()
         remote_cmd = f"bash -i -c 'set +m; set -e -o pipefail; {cmd_clean}'"
