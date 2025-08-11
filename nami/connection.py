@@ -71,6 +71,7 @@ class SystemSSHConnection:
             _forward_requested = True
 
         self._base_cmd: list[str] = ["ssh"]
+        self._base_cmd.extend(["-o", "StrictHostKeyChecking=no"])  # Auto-accept unknown hosts
         if self.port is not None:
             self._base_cmd.append(f"-p{self.port}")
         # Add port-forwarding only when explicitly requested and a port is available.
