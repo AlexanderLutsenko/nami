@@ -11,6 +11,7 @@ from pathlib import Path
 from string import Template
 from .transfer import s3, rsync
 from .connection import SystemSSHConnection as Connection
+import base64
 
 
 class Nami():
@@ -330,6 +331,66 @@ class Nami():
         except Exception:
             return ["❌ Error"]
 
+    def _add_key_to_instance(self, name, key_file):
+        config = self.config.get("instances", {}).get(name)
+        if not config:
+            return (name, False, "Instance not found")
+        
+        host = config["host"]
+        user = config["user"]
+        port = config.get("port")
+        
+        cmd = ["ssh-copy-id", "-f", "-i", key_file]
+        if port is not None:
+            cmd.extend(["-p", str(port)])
+        cmd.append(f"{user}@{host}")
+        
+        try:
+            subprocess.check_call(cmd)
+            return (name, True, None)
+        except subprocess.CalledProcessError as e:
+            return (name, False, f"ssh-copy-id failed with exit code {e.returncode}")
+        except FileNotFoundError:
+            return (name, False, "ssh-copy-id command not found")
+        except Exception as e:
+            return (name, False, str(e))
+
+    def add_ssh_key(self, public_key, instance_name=None):
+        if instance_name is None:
+            instances = list(self.config["instances"].keys())
+        else:
+            instances = [instance_name]
+        
+        if not instances:
+            print("No instances configured.")
+            return
+        
+        import tempfile
+        import os
+        
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.pub') as tmp:
+            tmp.write(public_key.strip() + '\n')
+            tmp_filename = tmp.name
+        
+        results = {}
+        with ThreadPoolExecutor(max_workers=30) as executor:
+            future_to_name = {
+                executor.submit(self._add_key_to_instance, n, tmp_filename): n 
+                for n in instances
+            }
+            for future in as_completed(future_to_name):
+                name, success, error = future.result()
+                results[name] = (success, error)
+        
+        os.unlink(tmp_filename)
+        
+        for name in instances:
+            success, error = results.get(name, (False, "Unknown error"))
+            if success:
+                print(f"✅ Added SSH key to {name}")
+            else:
+                print(f"❌ Failed to add SSH key to {name}: {error}")
+
 
 # -----------------------------------------------------------------------------
 # CLI entry point
@@ -374,6 +435,14 @@ def main():
     
     config_show_parser = config_subparsers.add_parser("show", help="Show configuration")
     config_show_parser.add_argument("key", nargs="?", help="Specific key to show (optional)")
+    
+    # SSH key management
+    ssh_key_parser = subparsers.add_parser("ssh-key", help="Manage SSH keys on instances")
+    ssh_key_subparsers = ssh_key_parser.add_subparsers(dest="ssh_key_action", help="SSH key actions")
+    
+    ssh_key_add_parser = ssh_key_subparsers.add_parser("add", help="Add SSH public key to instance(s)")
+    ssh_key_add_parser.add_argument("public_key", help="The public key string to add")
+    ssh_key_add_parser.add_argument("--instance", help="Specific instance name (if not provided, add to all)")
     
     # Unified transfer command
     transfer_parser = subparsers.add_parser("transfer", help="Transfer data between instances")
@@ -449,6 +518,11 @@ def main():
                 vm.show_personal_config()
         else:
             print("❌ Please specify 'set' or 'show' for config command")
+    elif args.command == "ssh-key":
+        if args.ssh_key_action == "add":
+            vm.add_ssh_key(args.public_key, args.instance)
+        else:
+            print(f"❌ Unknown ssh-key action: {args.ssh_key_action}. Available: add")
     elif args.command == "transfer":
         dest_path = args.dest_path or args.source_path
         if args.method == "rsync":

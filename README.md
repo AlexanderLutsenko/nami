@@ -84,13 +84,16 @@ $ nami list
 nami list
 
 # Connect via SSH or run a command
-nami ssh <instance> [command] [--forward [PORT]]
+nami ssh <instance_name> [command] [--forward [PORT]]
 
 # Add a new instance
-nami add <name> <host> <port> [--user USER] [--local-port PORT] [--description DESC]
+nami add <instance_name> <host> <port> [--user USER] [--local-port PORT] [--description DESC]
 
 # Remove an instance
-nami remove <name>
+nami remove <instance_name>
+
+# Add SSH public key to instance(s)
+nami ssh-key add "<public_key>" [--instance <instance_name>]
 
 ```
 
