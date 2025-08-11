@@ -281,7 +281,7 @@ class Nami():
         try:
             # Run nvidia-smi to get GPU information
             ssh_cmd = [
-                "ssh", "-o", "ConnectTimeout=5", "-o", "BatchMode=yes",
+                "ssh", "-o", "ConnectTimeout=5", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no",
             ]
             if config.get('port') is not None:
                 ssh_cmd.append(f"-p{config['port']}")
