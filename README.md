@@ -194,7 +194,11 @@ aws_secret_access_key: XXXX
 aws_endpoint_url: https://XXXX.com
 
 # Other personal settings
-# ...
+ssh_key: "~/.ssh/id_rsa_default"  # Default SSH key for all instances
+ssh_keys:  # Per-instance SSH key overrides
+  gpu-box: "~/.ssh/id_rsa_custom"
+  cloud-instance: "~/.ssh/id_ed25519_custom"
+
 ```
 
 #### Variable Priority

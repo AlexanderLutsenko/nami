@@ -7,10 +7,10 @@ from ..connection import SystemSSHConnection as Connection
 from ..util import build_exclude_flags_s3, build_exclude_flags_zip
 
 
-def _remote_path_is_file(instance: str, path: str, cfg: dict | None) -> bool:
+def _remote_path_is_file(instance: str, path: str, cfg: dict | None, personal_config: dict | None = None) -> bool:
     """Return True if *path* is a file on *instance*, False otherwise."""
     try:
-        with Connection(instance, cfg) as conn:
+        with Connection(instance, cfg, personal_config=personal_config) as conn:
             conn.run(f'test -f "{path}"')
         return True
     except RuntimeError:
@@ -27,8 +27,9 @@ def upload_to_s3(*,
                 operation_id: int | None = None,
                 endpoint: str | None = None,
                 config: dict = None,
+                personal_config: dict | None = None,
                 ) -> None:
-    with Connection(source_instance, config) as src:
+    with Connection(source_instance, config, personal_config=personal_config) as src:
         if archive:
             print("🔼 Uploading to S3 via ZIP archive …")
             zip_exclude_flags = build_exclude_flags_zip(exclude)
@@ -75,8 +76,9 @@ def download_from_s3(*,
                     operation_id: int | None = None,
                     endpoint: str | None = None,
                     config: dict = None,
+                    personal_config: dict | None = None,
                     ) -> None:
-    with Connection(dest_instance, config) as dest:
+    with Connection(dest_instance, config, personal_config=personal_config) as dest:
         if archive:
             print("🔽 Downloading from S3 via ZIP archive & extracting …")
             tid = operation_id or int(datetime.datetime.utcnow().timestamp())
@@ -120,7 +122,8 @@ def transfer_via_s3(*,
                     archive: bool = False,
                     operation_id: int | None = None,
                     endpoint: str | None = None,
-                    config: dict = None
+                    config: dict = None,
+                    personal_config: dict | None = None,
                     ) -> None:
     tid = operation_id or int(datetime.datetime.utcnow().timestamp())
 
@@ -130,7 +133,7 @@ def transfer_via_s3(*,
         s3_path = f"s3://{s3_bucket}/transfer/{tid}/xfer.zip"
         is_file = True
     else:
-        is_file = _remote_path_is_file(source_instance, source_path, config)
+        is_file = _remote_path_is_file(source_instance, source_path, config, personal_config=personal_config)
         if is_file:
             src_basename = Path(source_path).name
             s3_path = f"s3://{s3_bucket}/transfer/{tid}/{src_basename}"
@@ -153,6 +156,7 @@ def transfer_via_s3(*,
             operation_id=tid,
             endpoint=endpoint,
             config=config,
+            personal_config=personal_config,
         )
 
         download_from_s3(
@@ -165,6 +169,7 @@ def transfer_via_s3(*,
             operation_id=tid,
             endpoint=endpoint,
             config=config,
+            personal_config=personal_config,
         )
     finally:
         # Always attempt cleanup, even if the transfer failed at some point.
@@ -172,7 +177,7 @@ def transfer_via_s3(*,
         endpoint_flag = f' --endpoint-url "{endpoint}"' if endpoint else ""
         cleanup_prefix = f"s3://{s3_bucket}/transfer/{tid}/"
         try:
-            with Connection("local", config) as lcl:
+            with Connection("local", config, personal_config=personal_config) as lcl:
                 lcl.run(f'aws --profile {aws_profile}{endpoint_flag} s3 rm "{cleanup_prefix}" --recursive')
             print("✅ Cleanup completed!")
         except Exception as e:

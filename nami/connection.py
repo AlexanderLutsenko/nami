@@ -34,7 +34,7 @@ class SystemSSHConnection:
         already occupied.
     """
 
-    def __init__(self, instance_name: str, config: dict, *, enable_port_forwarding: bool | int = False):
+    def __init__(self, instance_name: str, config: dict, *, enable_port_forwarding: bool | int = False, personal_config: dict | None = None):
         instance_conf = config.get("instances", {}).get(instance_name, {})
         self.is_local = instance_name == "local" or instance_conf.get("host") in {"127.0.0.1", "localhost"}
         self.instance_name = instance_name
@@ -72,6 +72,14 @@ class SystemSSHConnection:
 
         self._base_cmd: list[str] = ["ssh"]
         self._base_cmd.extend(["-o", "StrictHostKeyChecking=no"])  # Auto-accept unknown hosts
+        ssh_key = None
+        if personal_config:
+            ssh_key = personal_config.get('ssh_keys', {}).get(instance_name) or personal_config.get('ssh_key')
+            if ssh_key:
+                ssh_key = os.path.expanduser(ssh_key)
+        self.ssh_key = ssh_key
+        if self.ssh_key:
+            self._base_cmd.extend(["-i", self.ssh_key])
         if self.port is not None:
             self._base_cmd.append(f"-p{self.port}")
         # Add port-forwarding only when explicitly requested and a port is available.
@@ -87,10 +95,13 @@ class SystemSSHConnection:
         print(f"🔗 Executing: {' '.join(cmd)}")
         subprocess.run(cmd)
 
-    def run(self, command: str) -> subprocess.CompletedProcess:
+    def run(self, command: str, capture: bool = False) -> subprocess.CompletedProcess:
         if self.is_local:
-            print(f"{fg.cyan}{command}{rs.all}")
-            result = subprocess.run(command, shell=True)
+            if capture:
+                result = subprocess.run(command, shell=True, capture_output=True, text=True)
+            else:
+                print(f"{fg.cyan}{command}{rs.all}")
+                result = subprocess.run(command, shell=True)
             if result.returncode != 0:
                 raise RuntimeError(f"Local command failed with exit {result.returncode}.")
             return result
@@ -101,16 +112,29 @@ class SystemSSHConnection:
             print(f"🔗 Establishing SSH connection to {self.instance_name} ({self.user}@{self.host}) …")
         import signal
         cmd_clean = textwrap.dedent(command).strip()
-        remote_cmd = f"bash -i -c 'set +m; set -e -o pipefail; {cmd_clean}'"
-        full_cmd = ["ssh", "-tt"] + self._base_cmd[1:] + [remote_cmd]
-        print(f"{fg.cyan}{remote_cmd}{rs.all}")
+        if capture:
+            remote_cmd = f"bash -c 'set -e -o pipefail; {cmd_clean}'"
+        else:
+            remote_cmd = f"bash -i -c 'set +m; set -e -o pipefail; {cmd_clean}'"
+        ssh_tty_flag = "-T" if capture else "-tt"
+        # Build SSH command. We need to ensure any extra options come before the host.
+        if capture:
+            base_without_ssh = self._base_cmd[1:-1]  # drop leading 'ssh' and trailing 'user@host'
+            host = self._base_cmd[-1]
+            extra_opts = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "-q"]
+            full_cmd = ["ssh", ssh_tty_flag] + base_without_ssh + extra_opts + [host, remote_cmd]
+        else:
+            full_cmd = ["ssh", ssh_tty_flag] + self._base_cmd[1:] + [remote_cmd]
+        if not capture:
+            print(f"{fg.cyan}{remote_cmd}{rs.all}")
         proc = subprocess.Popen(full_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=0)
         output_chunks: list[str] = []
         interrupted = False
         try:
             for chunk in iter(lambda: proc.stdout.read(CHUNK_SIZE), b""):
-                sys.stdout.buffer.write(chunk)
-                sys.stdout.flush()
+                if not capture:
+                    sys.stdout.buffer.write(chunk)
+                    sys.stdout.flush()
                 output_chunks.append(chunk.decode(errors="replace"))
         except KeyboardInterrupt:
             if not interrupted:
@@ -127,8 +151,15 @@ class SystemSSHConnection:
                 raise
         proc.wait()
         exit_status = proc.returncode
+        stdout = ''.join(output_chunks)
+        # Sanitize captured output to avoid terminal control artifacts
+        if capture:
+            stdout = stdout.replace('\r', '\n')
+            import re as _re
+            stdout = _re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", stdout)
         if exit_status != 0:
-            raise RuntimeError(f"Remote command failed with exit {exit_status}.")
+            raise RuntimeError(f"Remote command failed with exit {exit_status}. Output: {stdout}")
+        return subprocess.CompletedProcess(args=full_cmd, returncode=exit_status, stdout=stdout, stderr="")
 
     def __enter__(self):
         return self

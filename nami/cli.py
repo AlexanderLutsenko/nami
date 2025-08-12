@@ -260,76 +260,69 @@ class Nami():
             When ``True`` the instance's ``local_port`` value is forwarded via
             ``ssh -L``.  By default no port forwarding is performed.
         """
-        with Connection(instance_name, self.config, enable_port_forwarding=forward) as ssh:
+        with Connection(instance_name, self.config, enable_port_forwarding=forward, personal_config=self.personal_config) as ssh:
             ssh.run(command)
 
-    def connect_ssh(self, instance_name, command=None, forward=False):
+    def connect_ssh(self, instance_name, forward=False):
         """Open an interactive SSH session to *instance_name*.
 
         If *forward* is ``True`` the configured ``local_port`` will be
         forwarded.
         """
-        with Connection(instance_name, self.config, enable_port_forwarding=forward) as ssh:
-            ssh.run_interactive(command)
+        with Connection(instance_name, self.config, enable_port_forwarding=forward, personal_config=self.personal_config) as ssh:
+            ssh.run_interactive()
 
     def get_gpu_info(self, name):
         """Get GPU information for an instance."""
         if name not in self.config.get("instances", {}):
-            return ["❌ Not configured"]
+            return ["     ❌ Not configured"]
         
-        config = self.config["instances"][name]
         try:
-            # Run nvidia-smi to get GPU information
-            ssh_cmd = [
-                "ssh", "-o", "ConnectTimeout=5", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no",
-            ]
-            if config.get('port') is not None:
-                ssh_cmd.append(f"-p{config['port']}")
-            ssh_cmd.extend([
-                f"{config['user']}@{config['host']}",
-                "nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits 2>/dev/null || echo 'NO_GPU'"
-            ])
-            result = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=10)
-            
-            if result.returncode != 0:
-                return ["❌ SSH Failed"]
-            
-            output = result.stdout.strip()
-            if not output or output == "NO_GPU":
-                return ["🔘 No GPU"]
-            
-            # Parse GPU information
-            gpu_lines = output.split('\n')
-            gpu_info = []
-            for line in gpu_lines:
-                if line.strip():
-                    parts = [p.strip() for p in line.split(',')]
-                    if len(parts) >= 5:
-                        gpu_idx, gpu_name, gpu_util, mem_used, mem_total = parts[:5]
-                        try:
-                            gpu_util = int(gpu_util)
-                            mem_used = int(mem_used)
-                            mem_total = int(mem_total)
-                            mem_percent = int((mem_used / mem_total) * 100) if mem_total > 0 else 0
-                            
-                            # Color code based on utilisation
-                            if gpu_util >= 50:
-                                util_color = "🔴"
-                            elif mem_percent >= 50:
-                                util_color = "🟠"
-                            elif gpu_util >= 10:
-                                util_color = "🟡"
-                            else:
-                                util_color = "🟢"
-                            
-                            gpu_info.append(f"     {util_color} GPU{gpu_idx}: {gpu_util:3d}% | Mem: {mem_percent:3d}% | {gpu_name}")
-                        except (ValueError, ZeroDivisionError):
-                            gpu_info.append(f"     🔘 GPU{gpu_idx}: Error parsing")
-            
-            return gpu_info or ["🔘 No GPU data"]
+            with Connection(name, self.config, personal_config=self.personal_config) as conn:
+                result = conn.run(
+                    "nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits 2>/dev/null || echo 'NO_GPU'", 
+                    capture=True
+                )
+                
+                if result.returncode != 0:
+                    return ["     ❌ SSH Failed"]
+                
+                output = result.stdout.strip()
+                if not output or output == "NO_GPU":
+                    return ["     🔘 No GPU"]
+                
+                # Parse GPU information
+                gpu_lines = output.split('\n')
+                gpu_info = []
+                for line in gpu_lines:
+                    if line.strip():
+                        parts = [p.strip() for p in line.split(',')]
+                        if len(parts) >= 5:
+                            gpu_idx, gpu_name, gpu_util, mem_used, mem_total = parts[:5]
+                            try:
+                                gpu_util = int(gpu_util)
+                                mem_used = int(mem_used)
+                                mem_total = int(mem_total)
+                                mem_percent = int((mem_used / mem_total) * 100) if mem_total > 0 else 0
+                                
+                                # Color code based on utilisation
+                                if gpu_util >= 50:
+                                    util_color = "🔴"
+                                elif mem_percent >= 50:
+                                    util_color = "🟠"
+                                elif gpu_util >= 10:
+                                    util_color = "🟡"
+                                else:
+                                    util_color = "🟢"
+                                
+                                gpu_info.append(f"     {util_color} GPU{gpu_idx}: {gpu_util:3d}% | Mem: {mem_percent:3d}% | {gpu_name}")
+                            except (ValueError, ZeroDivisionError):
+                                gpu_info.append(f"     🔘 GPU{gpu_idx}: Error parsing")
+                
+                return gpu_info or ["     🔘 No GPU data"]
         
         except Exception:
-            return ["❌ Error"]
+            return ["     ❌ Error"]
 
     def _add_key_to_instance(self, name, key_file):
         config = self.config.get("instances", {}).get(name)
@@ -524,52 +517,55 @@ def main():
         else:
             print(f"❌ Unknown ssh-key action: {args.ssh_key_action}. Available: add")
     elif args.command == "transfer":
-        dest_path = args.dest_path or args.source_path
         if args.method == "rsync":
             rsync.transfer_via_rsync(
                 source_instance=args.source_instance,
                 dest_instance=args.dest_instance,
                 source_path=args.source_path,
-                dest_path=dest_path,
+                dest_path=args.dest_path or args.source_path,
                 exclude=args.exclude_patterns or "",
                 rsync_opts=args.rsync_opts,
                 archive=args.archive,
                 config=vm.config,
+                personal_config=vm.personal_config
             )
         elif args.method == "s3":
             s3.transfer_via_s3(
                 source_instance=args.source_instance,
                 dest_instance=args.dest_instance,
                 source_path=args.source_path,
-                dest_path=dest_path,
+                dest_path=args.dest_path or args.source_path,
                 s3_bucket=vm.personal_config["s3_bucket"],
                 aws_profile=vm.personal_config.get("aws_profile", "default"),
                 exclude=args.exclude_patterns or "",
                 archive=args.archive,
                 endpoint=args.endpoint,
                 config=vm.config,
+                personal_config=vm.personal_config
             )
     elif args.command == "from_s3":
         s3.download_from_s3(
             dest_instance=args.dest_instance,
             source_path=args.source_path,
             dest_path=args.dest_path,
-            aws_profile=args.aws_profile or vm.personal_config.get("aws_profile", "default"),
+            aws_profile=vm.personal_config.get("aws_profile", "default"),
             exclude=args.exclude_patterns or "",
             archive=args.archive,
             endpoint=args.endpoint,
             config=vm.config,
+            personal_config=vm.personal_config
         )
     elif args.command == "to_s3":
         s3.upload_to_s3(
             source_instance=args.source_instance,
             source_path=args.source_path,
             dest_path=args.dest_path,
-            aws_profile=args.aws_profile or vm.personal_config.get("aws_profile", "default"),
+            aws_profile=vm.personal_config.get("aws_profile", "default"),
             exclude=args.exclude_patterns or "",
             archive=args.archive,
             endpoint=args.endpoint,
             config=vm.config,
+            personal_config=vm.personal_config
         )
     elif args.command == "template":
         template_vars: dict[str, str] = {}

@@ -16,7 +16,8 @@ def transfer_via_rsync(*,
                        rsync_opts: str = "-avz --progress",
                        archive: bool = False,
                        operation_id: int | None = None,
-                       config: dict | None = None) -> None:
+                       config: dict | None = None,
+                       personal_config: dict | None = None) -> None:
     """Copy *source_path* on *source_instance* directly to *dest_path* on *dest_instance*.  (Full implementation)"""
 
     config = config or {}
@@ -29,14 +30,19 @@ def transfer_via_rsync(*,
     print(f"📦 Archive mode: {archive}")
     print(f"🗂️  Exclude     : {exclude}")
 
-    with Connection(source_instance, config) as src, Connection(dest_instance, config) as dest:
+    with Connection(source_instance, config, personal_config=personal_config) as src, Connection(dest_instance, config, personal_config=personal_config) as dest:
 
         if src.is_local and dest.is_local:
             raise ValueError("Both endpoints cannot be local. One side must be remote.")
 
-        # Build SSH -p flag snippets once for each endpoint
-        ssh_p_src = f"-p {src.port}" if src.port is not None else ""
-        ssh_p_dest = f"-p {dest.port}" if dest.port is not None else ""
+        # Build SSH option snippets once for each endpoint
+        ssh_opts_src = "-o StrictHostKeyChecking=no"
+        if src.port is not None:
+            ssh_opts_src += f" -p {src.port}"
+
+        ssh_opts_dest = "-o StrictHostKeyChecking=no"
+        if dest.port is not None:
+            ssh_opts_dest += f" -p {dest.port}"
 
         if archive:
             remote_zip_path = f"/tmp/xfer_{tid}.zip"
@@ -50,11 +56,11 @@ def transfer_via_rsync(*,
 
             if dest.is_local:
                 dest.run(
-                    f'rsync {rsync_opts} -e "ssh {ssh_p_src}" {src.user}@{src.host}:"{remote_zip_path}" "{remote_zip_path}"'
+                    f'rsync {rsync_opts} -e "ssh {ssh_opts_src}" {src.user}@{src.host}:"{remote_zip_path}" "{remote_zip_path}"'
                 )
             else:
                 src.run(
-                    f'rsync {rsync_opts} -e "ssh {ssh_p_dest}" "{remote_zip_path}" {dest.user}@{dest.host}:"{remote_zip_path}"'
+                    f'rsync {rsync_opts} -e "ssh {ssh_opts_dest}" "{remote_zip_path}" {dest.user}@{dest.host}:"{remote_zip_path}"'
                 )
 
             src.run(f'rm -f "{remote_zip_path}"')
@@ -67,11 +73,11 @@ def transfer_via_rsync(*,
         else:
             if dest.is_local:
                 dest.run(
-                    f'rsync {rsync_opts} {exclude_flags} -e "ssh {ssh_p_src}" {src.user}@{src.host}:"{source_path}" "{dest_path}"'
+                    f'rsync {rsync_opts} {exclude_flags} -e "ssh {ssh_opts_src}" {src.user}@{src.host}:"{source_path}" "{dest_path}"'
                 )
             else:
                 src.run(
-                    f'rsync {rsync_opts} {exclude_flags} -e "ssh {ssh_p_dest}" "{source_path}" {dest.user}@{dest.host}:"{dest_path}"'
+                    f'rsync {rsync_opts} {exclude_flags} -e "ssh {ssh_opts_dest}" "{source_path}" {dest.user}@{dest.host}:"{dest_path}"'
                 )
 
         print("✅ Transfer completed!") 
