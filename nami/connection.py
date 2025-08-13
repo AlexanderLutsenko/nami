@@ -121,7 +121,7 @@ class SystemSSHConnection:
         if capture:
             base_without_ssh = self._base_cmd[1:-1]  # drop leading 'ssh' and trailing 'user@host'
             host = self._base_cmd[-1]
-            extra_opts = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "-q"]
+            extra_opts = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=5"]
             full_cmd = ["ssh", ssh_tty_flag] + base_without_ssh + extra_opts + [host, remote_cmd]
         else:
             full_cmd = ["ssh", ssh_tty_flag] + self._base_cmd[1:] + [remote_cmd]

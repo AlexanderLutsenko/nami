@@ -111,15 +111,7 @@ class Nami():
         """Get all information for a single instance (status + GPU info)."""
         config = self.config["instances"][name]
         # Fetch GPU info first; this SSH call is sufficient to decide if the host is reachable.
-        gpu_info_lines = self.get_gpu_info(name)
-
-        # Determine online/offline status from the first returned line.
-        first_line = gpu_info_lines[0] if gpu_info_lines else "❌ Error"
-        if first_line.startswith("❌"):
-            status = "❌ Offline"
-        else:
-            status = "✅ Online"
-
+        gpu_info_lines, status = self.get_gpu_info(name)
         return name, config, status, gpu_info_lines
 
     def list_instances(self):
@@ -169,9 +161,10 @@ class Nami():
                 print(f"   Command: ssh {config['user']}@{config['host']} {local_port}")
             if config.get('description'):
                 print(f"   Description: {config['description']}")
-            print("   GPUs:")
-            for gpu_line in gpu_info_lines:
-                print(gpu_line)
+            if gpu_info_lines is not None:
+                print("   GPUs:")
+                for gpu_line in gpu_info_lines:
+                    print('     ' + gpu_line)
             print()
 
     def get_template(self, template_name):
@@ -275,7 +268,7 @@ class Nami():
     def get_gpu_info(self, name):
         """Get GPU information for an instance."""
         if name not in self.config.get("instances", {}):
-            return ["     ❌ Not configured"]
+            return ["❌ Not configured"]
         
         try:
             with Connection(name, self.config, personal_config=self.personal_config) as conn:
@@ -283,13 +276,9 @@ class Nami():
                     "nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits 2>/dev/null || echo 'NO_GPU'", 
                     capture=True
                 )
-                
-                if result.returncode != 0:
-                    return ["     ❌ SSH Failed"]
-                
                 output = result.stdout.strip()
                 if not output or output == "NO_GPU":
-                    return ["     🔘 No GPU"]
+                    return ["🔘 No GPU"], "✅ Online"
                 
                 # Parse GPU information
                 gpu_lines = output.split('\n')
@@ -315,14 +304,31 @@ class Nami():
                                 else:
                                     util_color = "🟢"
                                 
-                                gpu_info.append(f"     {util_color} GPU{gpu_idx}: {gpu_util:3d}% | Mem: {mem_percent:3d}% | {gpu_name}")
+                                gpu_info.append(f"{util_color} GPU{gpu_idx}: {gpu_util:3d}% | Mem: {mem_percent:3d}% | {gpu_name}")
                             except (ValueError, ZeroDivisionError):
-                                gpu_info.append(f"     🔘 GPU{gpu_idx}: Error parsing")
+                                gpu_info.append(f"🔘 GPU{gpu_idx}: Error parsing")
                 
-                return gpu_info or ["     🔘 No GPU data"]
+                return gpu_info or ["🔘 No GPU data"], "✅ Online"
         
-        except Exception:
-            return ["     ❌ Error"]
+        except Exception as e:
+            error_str = str(e).lower()
+            # Extract output from the error message if present
+            if "output:" in error_str:
+                _, output_part = error_str.split("output:", 1)
+                output_str = output_part.strip().lower()
+            else:
+                output_str = ""
+
+            full_error = error_str + " " + output_str
+
+            if any(keyword in full_error for keyword in ['connection refused', 'connection rejected', 'connection denied']):
+                return None, "⚠️  Unavailable"
+            elif any(keyword in full_error for keyword in ['unreachable', 'no route']):
+                return None, "❌ Network Error"
+            elif any(keyword in full_error for keyword in ['timeout', 'timed out']):
+                return None, "⏱️  Timeout"
+            else:
+                return None, "❌ Error: " + str(e)
 
     def _add_key_to_instance(self, name, key_file):
         config = self.config.get("instances", {}).get(name)
