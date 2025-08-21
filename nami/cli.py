@@ -455,6 +455,17 @@ def main():
     transfer_parser.add_argument("--rsync_opts", default="-avz --progress", help="Extra rsync options")
     transfer_parser.add_argument("--endpoint", help="Custom S3 endpoint URL")
 
+    # NFS mesh mounting command
+    nfs_parser = subparsers.add_parser("nfs", help="NFS mesh mounting operations")
+    nfs_subparsers = nfs_parser.add_subparsers(dest="nfs_action", required=True, help="NFS actions")
+
+    mesh_parser = nfs_subparsers.add_parser("mount-mesh", help="Setup and mount full NFS mesh among instances")
+    mesh_parser.add_argument("--instances", nargs="+", help="Instance names to include in the mesh")
+    mesh_parser.add_argument("--export_dir", default="/", help="Path to export on each server")
+    mesh_parser.add_argument("--mount_base", default="/mnt/peers", help="Base directory on clients for peer mounts")
+    mesh_parser.add_argument("--nfs_version", default="4", help="NFS protocol version for mounts")
+    mesh_parser.add_argument("--max_workers", type=int, default=24, help="Concurrency for operations")
+
     # Download from S3
     from_s3_parser = subparsers.add_parser("from_s3", help="Download files/folders from S3 to an instance")
     from_s3_parser.add_argument("--dest_instance", required=True)
@@ -549,6 +560,20 @@ def main():
                 config=vm.config,
                 personal_config=vm.personal_config
             )
+    elif args.command == "nfs":
+        if args.nfs_action == "mount-mesh":
+            from .nfs.nfs import setup_and_mount_full_mesh
+            setup_and_mount_full_mesh(
+                instances=args.instances,
+                export_dir=args.export_dir,
+                mount_base=args.mount_base,
+                nfs_version=args.nfs_version,
+                max_workers=args.max_workers,
+                config=vm.config,
+                personal_config=vm.personal_config
+            )
+        else:
+            print(f"❌ Unknown nfs action: {args.nfs_action}. Available: mount-mesh")
     elif args.command == "from_s3":
         s3.download_from_s3(
             dest_instance=args.dest_instance,

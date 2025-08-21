@@ -8,6 +8,7 @@
 - **🌐 Heterogeneous environments** - Works across different Linux distros and cloud providers (Vast, AWS, Runpod, etc.)
 - **📊 GPU monitoring** - GPU utilization and memory tracking
 - **📁 File transfer** - Transfer files between instances directly via rsync or using S3 as intermediary
+- **🗄️ NFS mesh mounting** - Set up and mount shared directories across selected instances
 - **📜 Template system** - Execute pre-configured bash script templates on remote instances  
 - **⚙️ Configuration management** - Personal and global configuration storage
 
@@ -142,6 +143,32 @@ nami from_s3
     [--archive] \
     [--aws_profile PROFILE]
 ```
+
+#### NFS Mesh
+
+Set up NFS exports on selected servers and mount a full mesh among them (each instance mounts every other instance, including itself via loopback) in one command.
+
+```bash
+# Export local /workspace on each server; mount peers under /mnt/peers/<instance>
+nami nfs mount-mesh 
+--instances instance-1 instance-2 instance-3 \
+--export_dir /workspace \
+--mount_base /mnt/peers
+```
+
+After this completes on, say, `instance-1`, running `ls /mnt/peers` will show one directory per selected instance (including itself).
+
+```bash
+instance-1$ ls /mnt/peers
+instance-1  instance-2  instance-3
+```
+
+Notes:
+- The command installs and configures NFS server on the selected instances (if needed) and exports `--export_dir`.
+- On each instance, mounts every peer under `--mount_base/<instance-name>` using NFSv4.
+- Idempotent behavior: if the mount directory is a real non-empty directory (not a mount), it is skipped to avoid masking data; otherwise mounts/remounts as needed.
+- Changing `--export_dir` updates existing mounts and `/etc/fstab` entries accordingly.
+- Ensure network access to NFS ports (2049/TCP+UDP and 111/TCP+UDP) in your firewall/Security Groups.
 
 #### Templates
 ```bash
