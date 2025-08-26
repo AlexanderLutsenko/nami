@@ -206,10 +206,6 @@ class Nami():
 
     def execute_template(self, instance_name, template_name, variables=None):
         # Ensure the instance exists before attempting to connect.
-        if instance_name not in self.config.get("instances", {}):
-            print(f"❌ Instance '{instance_name}' not found.")
-            return False
-
         variables = variables or {}
         template_content = self.get_template(template_name)
         

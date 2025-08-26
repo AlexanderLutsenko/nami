@@ -93,7 +93,7 @@ class SystemSSHConnection:
         if command:
             cmd.append(command)
         print(f"🔗 Executing: {' '.join(cmd)}")
-        subprocess.run(cmd)
+        return subprocess.run(cmd)
 
     def run(self, command: str, capture: bool = False) -> subprocess.CompletedProcess:
         if self.is_local:
