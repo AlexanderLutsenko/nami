@@ -95,41 +95,22 @@ class SystemSSHConnection:
         print(f"🔗 Executing: {' '.join(cmd)}")
         return subprocess.run(cmd)
 
-    def run(self, command: str, capture: bool = False) -> subprocess.CompletedProcess:
-        if self.is_local:
-            if capture:
-                result = subprocess.run(command, shell=True, capture_output=True, text=True)
-            else:
-                print(f"{fg.cyan}{command}{rs.all}")
-                result = subprocess.run(command, shell=True)
-            if result.returncode != 0:
-                raise RuntimeError(f"Local command failed with exit {result.returncode}.")
-            return result
+    def _run_process(self, popen_command, *, shell: bool, capture: bool, is_remote: bool, print_command: str | None):
+        """Execute a process, stream or capture output, and raise informative errors.
 
-        if self.port is not None:
-            print(f"🔗 Establishing SSH connection to {self.instance_name} ({self.user}@{self.host}:{self.port}) …")
-        else:
-            print(f"🔗 Establishing SSH connection to {self.instance_name} ({self.user}@{self.host}) …")
-        import signal
-        cmd_clean = textwrap.dedent(command).strip()
-        if capture:
-            remote_cmd = f"bash -c 'set -e -o pipefail; {cmd_clean}'"
-        else:
-            remote_cmd = f"bash -i -c 'set +m; set -e -o pipefail; {cmd_clean}'"
-        ssh_tty_flag = "-T" if capture else "-tt"
-        # Build SSH command. We need to ensure any extra options come before the host.
-        if capture:
-            base_without_ssh = self._base_cmd[1:-1]  # drop leading 'ssh' and trailing 'user@host'
-            host = self._base_cmd[-1]
-            extra_opts = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=5"]
-            full_cmd = ["ssh", ssh_tty_flag] + base_without_ssh + extra_opts + [host, remote_cmd]
-        else:
-            full_cmd = ["ssh", ssh_tty_flag] + self._base_cmd[1:] + [remote_cmd]
-        if not capture:
-            print(f"{fg.cyan}{remote_cmd}{rs.all}")
-        proc = subprocess.Popen(full_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=0)
+        popen_command can be a command list (preferred) or a string (when shell=True).
+        """
+        if print_command and not capture:
+            print(f"{fg.cyan}{print_command}{rs.all}")
+
+        proc = subprocess.Popen(
+            popen_command,
+            shell=shell,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            bufsize=0,
+        )
         output_chunks: list[str] = []
-        interrupted = False
         try:
             for chunk in iter(lambda: proc.stdout.read(CHUNK_SIZE), b""):
                 if not capture:
@@ -137,29 +118,45 @@ class SystemSSHConnection:
                     sys.stdout.flush()
                 output_chunks.append(chunk.decode(errors="replace"))
         except KeyboardInterrupt:
-            if not interrupted:
-                interrupted = True
-                proc.send_signal(signal.SIGINT)
-                print("⚠️  Sent SIGINT to remote. Press Ctrl-C again to terminate locally.")
-                try:
-                    proc.wait()
-                except KeyboardInterrupt:
-                    proc.kill()
-                    raise
-            else:
-                proc.kill()
-                raise
+            proc.terminate()
+            raise
         proc.wait()
         exit_status = proc.returncode
         stdout = ''.join(output_chunks)
-        # Sanitize captured output to avoid terminal control artifacts
-        if capture:
-            stdout = stdout.replace('\r', '\n')
-            import re as _re
-            stdout = _re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", stdout)
         if exit_status != 0:
-            raise RuntimeError(f"Remote command failed with exit {exit_status}. Output: {stdout}")
-        return subprocess.CompletedProcess(args=full_cmd, returncode=exit_status, stdout=stdout, stderr="")
+            label = "Remote" if is_remote else "Local"
+            raise RuntimeError(f"{label} command failed with exit {exit_status}. Output: {stdout}")
+        return subprocess.CompletedProcess(args=popen_command, returncode=exit_status, stdout=stdout, stderr="")
+
+    def _build_remote_command(self, command: str, capture: bool):
+        cmd_clean = textwrap.dedent(command).strip()
+        remote_cmd = (
+            f"bash -c 'set -e -o pipefail; {cmd_clean}'" if capture
+            else f"bash -i -c 'set +m; set -e -o pipefail; {cmd_clean}'"
+        )
+        ssh_tty_flag = "-T" if capture else "-tt"
+        base_without_ssh = self._base_cmd[1:-1]  # drop leading 'ssh' and trailing 'user@host'
+        host = self._base_cmd[-1]
+        extra_opts = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=5"] if capture else []
+        full_cmd = ["ssh", ssh_tty_flag] + base_without_ssh + extra_opts + [host, remote_cmd]
+        return full_cmd, remote_cmd
+
+    def run(self, command: str, capture: bool = False) -> subprocess.CompletedProcess:
+        if self.is_local:
+            popen_command, shell, print_command, is_remote = command, True, command, False
+        else:
+            port_display = f":{self.port}" if self.port is not None else ""
+            print(f"🔗 Establishing SSH connection to {self.instance_name} ({self.user}@{self.host}{port_display}) …")
+            full_cmd, remote_cmd = self._build_remote_command(command, capture)
+            popen_command, shell, print_command, is_remote = full_cmd, False, remote_cmd, True
+
+        return self._run_process(
+            popen_command,
+            shell=shell,
+            capture=capture,
+            is_remote=is_remote,
+            print_command=print_command,
+        )
 
     def __enter__(self):
         return self
