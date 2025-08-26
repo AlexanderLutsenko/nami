@@ -114,7 +114,11 @@ class SystemSSHConnection:
         try:
             for chunk in iter(lambda: proc.stdout.read(CHUNK_SIZE), b""):
                 if not capture:
-                    sys.stdout.buffer.write(chunk)
+                    text_chunk = chunk.decode(errors="replace")
+                    if hasattr(sys.stdout, "buffer"):
+                        sys.stdout.buffer.write(chunk)
+                    else:
+                        sys.stdout.write(text_chunk)
                     sys.stdout.flush()
                 output_chunks.append(chunk.decode(errors="replace"))
         except KeyboardInterrupt:
