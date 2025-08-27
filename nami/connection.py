@@ -147,7 +147,8 @@ class SystemSSHConnection:
 
     def run(self, command: str, capture: bool = False) -> subprocess.CompletedProcess:
         if self.is_local:
-            popen_command, shell, print_command, is_remote = command, True, command, False
+            # Wrap in interactive Bash to source .bashrc (consistent with remote behavior)
+            popen_command, shell, print_command, is_remote = f"bash -i -c '{command}'", True, command, False
         else:
             port_display = f":{self.port}" if self.port is not None else ""
             print(f"🔗 Establishing SSH connection to {self.instance_name} ({self.user}@{self.host}{port_display}) …")
