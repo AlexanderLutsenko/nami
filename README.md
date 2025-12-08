@@ -33,9 +33,6 @@ nami ssh gpu-box
 # Run a command on an instance
 nami ssh gpu-box "nvidia-smi"
 
-# Forward an instance’s configured port (e.g. Jupyter on 8888) to localhost
-nami ssh gpu-box --forward
-
 # Forward an arbitrary local port (override the one in config)
 nami ssh gpu-box --forward 9000
 
@@ -96,6 +93,8 @@ nami remove <instance_name>
 # Add SSH public key to instance(s)
 nami ssh-key add "<public_key>" [--instance <instance_name>]
 
+# Remove SSH key(s) matching a pattern from instance(s)
+nami ssh-key remove "<pattern>" [--instance <instance_name>]
 ```
 
 #### Configuration
@@ -150,7 +149,7 @@ Set up NFS exports on selected servers and mount a full mesh among them (each in
 
 ```bash
 # Export local /workspace on each server; mount peers under /mnt/peers/<instance>
-nami nfs mount-mesh 
+nami nfs mount-mesh \
 --instances instance-1 instance-2 instance-3 \
 --export_dir /workspace \
 --mount_base /mnt/peers

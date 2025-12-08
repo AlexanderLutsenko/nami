@@ -7,6 +7,33 @@ from ..connection import SystemSSHConnection as Connection
 from ..util import build_exclude_flags_s3, build_exclude_flags_zip
 
 
+def _build_aws_env_prefix(personal_config: dict | None) -> str:
+    """Build environment variable prefix for AWS CLI commands.
+
+    Reads aws_access_key_id, aws_secret_access_key, and optionally
+    aws_session_token from personal_config. When credentials are provided,
+    returns a string like:
+        AWS_ACCESS_KEY_ID='...' AWS_SECRET_ACCESS_KEY='...' ...
+
+    This avoids storing credentials on disk in ~/.aws/credentials.
+    Returns empty string if no credentials are provided.
+    """
+    if not personal_config:
+        return ""
+    aws_access_key_id = personal_config.get("aws_access_key_id")
+    aws_secret_access_key = personal_config.get("aws_secret_access_key")
+    if not aws_access_key_id or not aws_secret_access_key:
+        return ""
+    parts = [
+        f"AWS_ACCESS_KEY_ID='{aws_access_key_id}'",
+        f"AWS_SECRET_ACCESS_KEY='{aws_secret_access_key}'",
+    ]
+    aws_session_token = personal_config.get("aws_session_token")
+    if aws_session_token:
+        parts.append(f"AWS_SESSION_TOKEN='{aws_session_token}'")
+    return " ".join(parts) + " "
+
+
 def _remote_path_is_file(instance: str, path: str, cfg: dict | None, personal_config: dict | None = None) -> bool:
     """Return True if *path* is a file on *instance*, False otherwise."""
     try:
@@ -29,6 +56,12 @@ def upload_to_s3(*,
                 config: dict = None,
                 personal_config: dict | None = None,
                 ) -> None:
+    # When credentials are provided in personal_config, use env vars instead of --profile
+    aws_env = _build_aws_env_prefix(personal_config)
+    profile_flag = "" if aws_env else f"--profile {aws_profile} "
+    # Use endpoint from personal_config if not explicitly provided
+    endpoint = endpoint or (personal_config.get("aws_endpoint_url") if personal_config else None)
+
     with Connection(source_instance, config, personal_config=personal_config) as src:
         if archive:
             print("🔼 Uploading to S3 via ZIP archive …")
@@ -38,11 +71,11 @@ def upload_to_s3(*,
             item_name = Path(source_path.rstrip("/")).name
             # We first change to the source directory and then create a zip archive that contains the *item_name* only. This
             # works both for directories and single files.
-            endpoint_flag = f' --endpoint-url "{endpoint}"' if endpoint else ""
+            endpoint_flag = f'--endpoint-url "{endpoint}" ' if endpoint else ""
             src.run(
                 f'''
                 cd "{src_dir}"
-                zip -r -0 - "{item_name}" {zip_exclude_flags} | aws --profile {aws_profile}{endpoint_flag} s3 cp - "{dest_path}"
+                zip -r -0 - "{item_name}" {zip_exclude_flags} | {aws_env}aws {profile_flag}{endpoint_flag}s3 cp - "{dest_path}"
                 '''
             )
         else:
@@ -50,13 +83,13 @@ def upload_to_s3(*,
             aws_exclude_flags = build_exclude_flags_s3(exclude)
             # If the source path points to a directory we use `aws s3 sync`, otherwise fall back to `aws s3 cp`
             # This allows transferring both directories and single files.
-            endpoint_flag = f' --endpoint-url "{endpoint}"' if endpoint else ""
+            endpoint_flag = f'--endpoint-url "{endpoint}" ' if endpoint else ""
             src.run(
                 f'''
                 if [ -d "{source_path}" ]; then
-                    aws --profile {aws_profile}{endpoint_flag} s3 sync "{source_path}" "{dest_path}" {aws_exclude_flags}
+                    {aws_env}aws {profile_flag}{endpoint_flag}s3 sync "{source_path}" "{dest_path}" {aws_exclude_flags}
                 elif [ -f "{source_path}" ]; then
-                    aws --profile {aws_profile}{endpoint_flag} s3 cp "{source_path}" "{dest_path}"
+                    {aws_env}aws {profile_flag}{endpoint_flag}s3 cp "{source_path}" "{dest_path}"
                 else
                     echo "❌ Source path does not exist: {source_path}" >&2
                     exit 1
@@ -78,6 +111,12 @@ def download_from_s3(*,
                     config: dict = None,
                     personal_config: dict | None = None,
                     ) -> None:
+    # When credentials are provided in personal_config, use env vars instead of --profile
+    aws_env = _build_aws_env_prefix(personal_config)
+    profile_flag = "" if aws_env else f"--profile {aws_profile} "
+    # Use endpoint from personal_config if not explicitly provided
+    endpoint = endpoint or (personal_config.get("aws_endpoint_url") if personal_config else None)
+
     with Connection(dest_instance, config, personal_config=personal_config) as dest:
         if archive:
             print("🔽 Downloading from S3 via ZIP archive & extracting …")
@@ -87,10 +126,10 @@ def download_from_s3(*,
             # the file ends up at the exact *dest_path*. For directories the behaviour is the same: we create the parent
             # directory (if necessary) and extract the archive inside it.
             dest_parent = Path(dest_path.rstrip("/")).parent or Path(".")
-            endpoint_flag = f' --endpoint-url "{endpoint}"' if endpoint else ""
+            endpoint_flag = f'--endpoint-url "{endpoint}" ' if endpoint else ""
             dest.run(
                 f'''
-                aws --profile {aws_profile}{endpoint_flag} s3 cp "{source_path}" {remote_zip_path}
+                {aws_env}aws {profile_flag}{endpoint_flag}s3 cp "{source_path}" {remote_zip_path}
                 mkdir -p "{dest_parent}"
                 unzip -o {remote_zip_path} -d "{dest_parent}"
                 rm {remote_zip_path}
@@ -99,13 +138,13 @@ def download_from_s3(*,
         else:
             print("🔽 Downloading from S3 …")
             aws_exclude_flags = build_exclude_flags_s3(exclude)
-            endpoint_flag = f' --endpoint-url "{endpoint}"' if endpoint else ""
+            endpoint_flag = f'--endpoint-url "{endpoint}" ' if endpoint else ""
             dest.run(
                 f'''
                 mkdir -p "$(dirname "{dest_path}")" || true
                 # Attempt to copy as a single file first; if that fails, fallback to sync for directories.
-                aws --profile {aws_profile}{endpoint_flag} s3 cp "{source_path}" "{dest_path}" || \
-                aws --profile {aws_profile}{endpoint_flag} s3 sync "{source_path}" "{dest_path}" {aws_exclude_flags}
+                {aws_env}aws {profile_flag}{endpoint_flag}s3 cp "{source_path}" "{dest_path}" || \
+                {aws_env}aws {profile_flag}{endpoint_flag}s3 sync "{source_path}" "{dest_path}" {aws_exclude_flags}
                 '''
             )
         print("✅ Download completed!")
@@ -125,6 +164,8 @@ def transfer_via_s3(*,
                     config: dict = None,
                     personal_config: dict | None = None,
                     ) -> None:
+    # Use endpoint from personal_config if not explicitly provided
+    endpoint = endpoint or (personal_config.get("aws_endpoint_url") if personal_config else None)
     tid = operation_id or int(datetime.datetime.utcnow().timestamp())
 
     # Decide whether the given source path is a file or directory **on the remote source instance**.
@@ -174,11 +215,13 @@ def transfer_via_s3(*,
     finally:
         # Always attempt cleanup, even if the transfer failed at some point.
         print("🧹 Cleaning up S3 temporary data …")
-        endpoint_flag = f' --endpoint-url "{endpoint}"' if endpoint else ""
+        aws_env = _build_aws_env_prefix(personal_config)
+        profile_flag = "" if aws_env else f"--profile {aws_profile} "
+        endpoint_flag = f'--endpoint-url "{endpoint}" ' if endpoint else ""
         cleanup_prefix = f"s3://{s3_bucket}/transfer/{tid}/"
         try:
             with Connection("local", config, personal_config=personal_config) as lcl:
-                lcl.run(f'aws --profile {aws_profile}{endpoint_flag} s3 rm "{cleanup_prefix}" --recursive')
+                lcl.run(f'{aws_env}aws {profile_flag}{endpoint_flag}s3 rm "{cleanup_prefix}" --recursive')
             print("✅ Cleanup completed!")
         except Exception as e:
             print(f"⚠️  Cleanup failed: {e}")

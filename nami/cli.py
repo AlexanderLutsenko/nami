@@ -4,6 +4,7 @@ import yaml
 import argparse
 import subprocess
 import tempfile
+import textwrap
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -350,6 +351,99 @@ class Nami():
         except Exception as e:
             return (name, False, str(e))
 
+    def _remove_key_from_instance(self, name, pattern):
+        """Remove SSH key(s) matching pattern from an instance's authorized_keys."""
+        config = self.config.get("instances", {}).get(name)
+        if not config:
+            return (name, False, "Instance not found", 0)
+        
+        host = config["host"]
+        user = config["user"]
+        port = config.get("port")
+        
+        # Build SSH command
+        ssh_cmd = ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "BatchMode=yes"]
+        if port is not None:
+            ssh_cmd.extend(["-p", str(port)])
+        ssh_cmd.append(f"{user}@{host}")
+        
+        # Use sed to remove lines matching the pattern from authorized_keys
+        # First, count matching lines, then remove them
+        escaped_pattern = pattern.replace("'", "'\\''")
+        remote_cmd = textwrap.dedent(f'''
+            count=$(grep -c '{escaped_pattern}' ~/.ssh/authorized_keys 2>/dev/null || echo 0)
+            if [ "$count" -gt 0 ]; then
+                sed -i '/{escaped_pattern}/d' ~/.ssh/authorized_keys
+                echo "REMOVED:$count"
+            else
+                echo "REMOVED:0"
+            fi
+        ''')
+        
+        try:
+            result = subprocess.run(
+                ssh_cmd + [remote_cmd],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            if result.returncode != 0:
+                return (name, False, f"SSH command failed: {result.stderr.strip()}", 0)
+            
+            # Parse the count from output
+            for line in result.stdout.strip().split('\n'):
+                if line.startswith("REMOVED:"):
+                    count = int(line.split(":")[1])
+                    return (name, True, None, count)
+            return (name, True, None, 0)
+        except subprocess.TimeoutExpired:
+            return (name, False, "Connection timed out", 0)
+        except Exception as e:
+            return (name, False, str(e), 0)
+
+    def remove_ssh_key(self, pattern, instance_name=None):
+        """Remove SSH key(s) matching a pattern from instance(s).
+        
+        The pattern is matched against the entire key line, so you can match by:
+        - Email (e.g., "user@example.com")
+        - Username/comment (e.g., "john")
+        - Key type (e.g., "ssh-ed25519")
+        - Part of the key itself
+        """
+        if instance_name is None:
+            instances = list(self.config["instances"].keys())
+        else:
+            instances = [instance_name]
+        
+        if not instances:
+            print("No instances configured.")
+            return
+        
+        results = {}
+        with ThreadPoolExecutor(max_workers=30) as executor:
+            future_to_name = {
+                executor.submit(self._remove_key_from_instance, n, pattern): n 
+                for n in instances
+            }
+            for future in as_completed(future_to_name):
+                name, success, error, count = future.result()
+                results[name] = (success, error, count)
+        
+        total_removed = 0
+        for name in instances:
+            success, error, count = results.get(name, (False, "Unknown error", 0))
+            if success:
+                if count > 0:
+                    print(f"✅ Removed {count} key(s) from {name}")
+                    total_removed += count
+                else:
+                    print(f"ℹ️  No matching keys found on {name}")
+            else:
+                print(f"❌ Failed to remove key from {name}: {error}")
+        
+        if total_removed > 0:
+            print(f"\n🔑 Total: Removed {total_removed} key(s) across {len(instances)} instance(s)")
+
     def add_ssh_key(self, public_key, instance_name=None):
         if instance_name is None:
             instances = list(self.config["instances"].keys())
@@ -439,6 +533,10 @@ def main():
     ssh_key_add_parser.add_argument("public_key", help="The public key string to add")
     ssh_key_add_parser.add_argument("--instance", help="Specific instance name (if not provided, add to all)")
     
+    ssh_key_remove_parser = ssh_key_subparsers.add_parser("remove", help="Remove SSH key(s) matching a pattern from instance(s)")
+    ssh_key_remove_parser.add_argument("pattern", help="Pattern to match (e.g., email, username, or part of the key)")
+    ssh_key_remove_parser.add_argument("--instance", help="Specific instance name (if not provided, remove from all)")
+    
     # Unified transfer command
     transfer_parser = subparsers.add_parser("transfer", help="Transfer data between instances")
     transfer_parser.add_argument("--method", choices=["rsync", "s3"], default="rsync", help="Transfer method")
@@ -527,8 +625,10 @@ def main():
     elif args.command == "ssh-key":
         if args.ssh_key_action == "add":
             vm.add_ssh_key(args.public_key, args.instance)
+        elif args.ssh_key_action == "remove":
+            vm.remove_ssh_key(args.pattern, args.instance)
         else:
-            print(f"❌ Unknown ssh-key action: {args.ssh_key_action}. Available: add")
+            print(f"❌ Unknown ssh-key action: {args.ssh_key_action}. Available: add, remove")
     elif args.command == "transfer":
         if args.method == "rsync":
             rsync.transfer_via_rsync(

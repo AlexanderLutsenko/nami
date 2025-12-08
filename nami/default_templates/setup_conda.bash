@@ -11,4 +11,10 @@ wget https://repo.anaconda.com/archive/$installer
 bash $installer -b -u
 rm $installer
 
+# # Explicitly activate Conda for this session (updates PATH)
+# . ~/anaconda3/etc/profile.d/conda.sh
+
+# # Now initialize for future shells
+# conda init bash
+
 echo "✅ Conda installed successfully." 
