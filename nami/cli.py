@@ -545,6 +545,7 @@ def main():
     transfer_parser.add_argument("--source_path", required=True, help="Path on source instance to copy")
     transfer_parser.add_argument("--dest_path", help="Destination path on destination instance (defaults to --source_path)")
     transfer_parser.add_argument("--exclude", dest="exclude_patterns", help="Comma-separated patterns to exclude when syncing")
+    transfer_parser.add_argument("--include", dest="include_patterns", help="Comma-separated patterns to include when syncing")
     transfer_parser.add_argument("--archive", action="store_true", help="Archive mode (ZIP)")
     transfer_parser.add_argument("--rsync_opts", default="-avz --progress", help="Extra rsync options")
     transfer_parser.add_argument("--endpoint", help="Custom S3 endpoint URL")
@@ -566,6 +567,7 @@ def main():
     from_s3_parser.add_argument("--source_path", required=True)
     from_s3_parser.add_argument("--dest_path", required=True)
     from_s3_parser.add_argument("--exclude", dest="exclude_patterns")
+    from_s3_parser.add_argument("--include", dest="include_patterns")
     from_s3_parser.add_argument("--archive", action="store_true")
     from_s3_parser.add_argument("--aws_profile")
     from_s3_parser.add_argument("--endpoint", help="Custom S3 endpoint URL")
@@ -576,6 +578,7 @@ def main():
     to_s3_parser.add_argument("--source_path", required=True)
     to_s3_parser.add_argument("--dest_path", required=True)
     to_s3_parser.add_argument("--exclude", dest="exclude_patterns")
+    to_s3_parser.add_argument("--include", dest="include_patterns")
     to_s3_parser.add_argument("--archive", action="store_true")
     to_s3_parser.add_argument("--aws_profile")
     to_s3_parser.add_argument("--endpoint", help="Custom S3 endpoint URL")
@@ -651,6 +654,7 @@ def main():
                 s3_bucket=vm.personal_config["s3_bucket"],
                 aws_profile=vm.personal_config.get("aws_profile", "default"),
                 exclude=args.exclude_patterns or "",
+                include=args.include_patterns or "",
                 archive=args.archive,
                 endpoint=args.endpoint,
                 config=vm.config,
@@ -677,6 +681,7 @@ def main():
             dest_path=args.dest_path,
             aws_profile=vm.personal_config.get("aws_profile", "default"),
             exclude=args.exclude_patterns or "",
+            include=args.include_patterns or "",
             archive=args.archive,
             endpoint=args.endpoint,
             config=vm.config,
@@ -689,6 +694,7 @@ def main():
             dest_path=args.dest_path,
             aws_profile=vm.personal_config.get("aws_profile", "default"),
             exclude=args.exclude_patterns or "",
+            include=args.include_patterns or "",
             archive=args.archive,
             endpoint=args.endpoint,
             config=vm.config,

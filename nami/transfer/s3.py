@@ -4,7 +4,7 @@ import datetime
 from pathlib import Path
 
 from ..connection import SystemSSHConnection as Connection
-from ..util import build_exclude_flags_s3, build_exclude_flags_zip
+from ..util import build_exclude_flags_s3, build_include_flags_s3, build_exclude_flags_zip
 
 
 def _build_aws_env_prefix(personal_config: dict | None) -> str:
@@ -50,6 +50,7 @@ def upload_to_s3(*,
                 dest_path: str,
                 aws_profile: str = "default",
                 exclude: str = "",
+                include: str = "",
                 archive: bool = False,
                 operation_id: int | None = None,
                 endpoint: str | None = None,
@@ -81,13 +82,14 @@ def upload_to_s3(*,
         else:
             print("🔼 Uploading to S3 …")
             aws_exclude_flags = build_exclude_flags_s3(exclude)
+            aws_include_flags = build_include_flags_s3(include)
             # If the source path points to a directory we use `aws s3 sync`, otherwise fall back to `aws s3 cp`
             # This allows transferring both directories and single files.
             endpoint_flag = f'--endpoint-url "{endpoint}" ' if endpoint else ""
             src.run(
                 f'''
                 if [ -d "{source_path}" ]; then
-                    {aws_env}aws {profile_flag}{endpoint_flag}s3 sync "{source_path}" "{dest_path}" {aws_exclude_flags}
+                    {aws_env}aws {profile_flag}{endpoint_flag}s3 sync "{source_path}" "{dest_path}" {aws_exclude_flags} {aws_include_flags}
                 elif [ -f "{source_path}" ]; then
                     {aws_env}aws {profile_flag}{endpoint_flag}s3 cp "{source_path}" "{dest_path}"
                 else
@@ -105,6 +107,7 @@ def download_from_s3(*,
                     dest_path: str,
                     aws_profile: str = "default",
                     exclude: str = "",
+                    include: str = "",
                     archive: bool = False,
                     operation_id: int | None = None,
                     endpoint: str | None = None,
@@ -138,13 +141,14 @@ def download_from_s3(*,
         else:
             print("🔽 Downloading from S3 …")
             aws_exclude_flags = build_exclude_flags_s3(exclude)
+            aws_include_flags = build_include_flags_s3(include)
             endpoint_flag = f'--endpoint-url "{endpoint}" ' if endpoint else ""
             dest.run(
                 f'''
                 mkdir -p "$(dirname "{dest_path}")" || true
                 # Attempt to copy as a single file first; if that fails, fallback to sync for directories.
                 {aws_env}aws {profile_flag}{endpoint_flag}s3 cp "{source_path}" "{dest_path}" || \
-                {aws_env}aws {profile_flag}{endpoint_flag}s3 sync "{source_path}" "{dest_path}" {aws_exclude_flags}
+                {aws_env}aws {profile_flag}{endpoint_flag}s3 sync "{source_path}" "{dest_path}" {aws_exclude_flags} {aws_include_flags}
                 '''
             )
         print("✅ Download completed!")
@@ -158,6 +162,7 @@ def transfer_via_s3(*,
                     s3_bucket: str,
                     aws_profile: str = "default",
                     exclude: str = "",
+                    include: str = "",
                     archive: bool = False,
                     operation_id: int | None = None,
                     endpoint: str | None = None,
@@ -184,7 +189,8 @@ def transfer_via_s3(*,
     print("──────────── Transfer Context ────────────")
     print(f"🚚 Transfer ID : {tid}")
     print(f"📦 Archive mode: {archive}")
-    print(f"🗂️  Exclude     : {exclude}\n")
+    print(f"🗂️  Exclude     : {exclude}")
+    print(f"🗂️  Include     : {include}\n")
 
     try:
         upload_to_s3(
@@ -193,6 +199,7 @@ def transfer_via_s3(*,
             dest_path=s3_path,
             aws_profile=aws_profile,
             exclude=exclude,
+            include=include,
             archive=archive,
             operation_id=tid,
             endpoint=endpoint,
@@ -206,6 +213,7 @@ def transfer_via_s3(*,
             dest_path=dest_path,
             aws_profile=aws_profile,
             exclude=exclude,
+            include=include,
             archive=archive,
             operation_id=tid,
             endpoint=endpoint,
