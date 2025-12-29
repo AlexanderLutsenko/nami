@@ -72,11 +72,16 @@ def upload_to_s3(*,
             item_name = Path(source_path.rstrip("/")).name
             # We first change to the source directory and then create a zip archive that contains the *item_name* only. This
             # works both for directories and single files.
+            # Use a temp file instead of pipes to support -0 (store) and -y (symlinks) flags which don't work with pipes.
+            tid = operation_id or int(datetime.datetime.utcnow().timestamp())
+            remote_zip_path = f"/tmp/xfer_{tid}.zip"
             endpoint_flag = f'--endpoint-url "{endpoint}" ' if endpoint else ""
             src.run(
                 f'''
                 cd "{src_dir}"
-                zip -r -0 - "{item_name}" {zip_exclude_flags} | {aws_env}aws {profile_flag}{endpoint_flag}s3 cp - "{dest_path}"
+                zip -r -0 -y "{remote_zip_path}" "{item_name}" {zip_exclude_flags}
+                {aws_env}aws {profile_flag}{endpoint_flag}s3 cp "{remote_zip_path}" "{dest_path}"
+                rm -f "{remote_zip_path}"
                 '''
             )
         else:

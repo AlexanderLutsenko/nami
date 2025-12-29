@@ -51,7 +51,7 @@ def transfer_via_rsync(*,
             src_dir = os.path.dirname(source_path.rstrip("/")) or "."
             item_name = os.path.basename(source_path.rstrip("/"))
             src.run(
-                f'cd "{src_dir}" && zip -r -0 "{remote_zip_path}" "{item_name}" {zip_exclude_flags}'
+                f'cd "{src_dir}" && zip -r -0 -y "{remote_zip_path}" "{item_name}" {zip_exclude_flags}'
             )
 
             if dest.is_local:
