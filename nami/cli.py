@@ -80,23 +80,25 @@ class Nami():
     
     def save_config(self):
         """Save configuration to YAML file."""
+        dumper = yaml.SafeDumper
+        dumper.add_representer(type(None), lambda d, _: d.represent_scalar('tag:yaml.org,2002:null', ''))
         with open(self.config_file, 'w') as f:
-            yaml.dump(self.config, f, default_flow_style=False, indent=2)
+            yaml.dump(self.config, f, Dumper=dumper, default_flow_style=False, indent=2)
 
     def add_instance(self, name, host, port, user="root", local_port=None, description=""):
         """Add a new instance to the configuration."""
         instance_config = {
+            "description": description,
             "host": host,
-            "port": port,
             "user": user,
-            "description": description
+            "port": port,
+            "local_port": local_port,
         }
-        if local_port:
-            instance_config["local_port"] = local_port
 
         self.config.setdefault("instances", {})[name] = instance_config
         self.save_config()
-        print(f"✅ Added instance '{name}': {user}@{host}:{port}")
+        port_str = f":{port}" if port is not None else ""
+        print(f"✅ Added instance '{name}': {user}@{host}{port_str}")
 
     def remove_instance(self, name):
         """Remove an instance from the configuration."""
@@ -493,7 +495,7 @@ def main():
     add_parser = subparsers.add_parser("add", help="Add a new instance")
     add_parser.add_argument("name", help="Instance name")
     add_parser.add_argument("host", help="Host IP address")
-    add_parser.add_argument("port", type=int, help="SSH port")
+    add_parser.add_argument("port", nargs="?", default=None, type=lambda x: int(x) if x else None, help="SSH port (optional)")
     add_parser.add_argument("--user", default="root", help="SSH user (default: root)")
     add_parser.add_argument("--local-port", type=int, help="Local port for SSH tunnel")
     add_parser.add_argument("--description", help="Instance description")
@@ -548,6 +550,7 @@ def main():
     transfer_parser.add_argument("--include", dest="include_patterns", help="Comma-separated patterns to include when syncing")
     transfer_parser.add_argument("--archive", action="store_true", help="Archive mode (ZIP)")
     transfer_parser.add_argument("--rsync_opts", default="-avz --progress", help="Extra rsync options")
+    transfer_parser.add_argument("--mkdirs", action="store_true", help="Create destination directories if they don't exist")
     transfer_parser.add_argument("--endpoint", help="Custom S3 endpoint URL")
 
     # NFS mesh mounting command
@@ -642,6 +645,7 @@ def main():
                 exclude=args.exclude_patterns or "",
                 rsync_opts=args.rsync_opts,
                 archive=args.archive,
+                mkdirs=args.mkdirs,
                 config=vm.config,
                 personal_config=vm.personal_config
             )

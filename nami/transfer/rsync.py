@@ -15,6 +15,7 @@ def transfer_via_rsync(*,
                        exclude: str = "",
                        rsync_opts: str = "-avz --progress",
                        archive: bool = False,
+                       mkdirs: bool = True,
                        operation_id: int | None = None,
                        config: dict | None = None,
                        personal_config: dict | None = None) -> None:
@@ -28,6 +29,7 @@ def transfer_via_rsync(*,
     print("──────────── Transfer Context ────────────")
     print(f"🚚 Transfer ID : {tid}")
     print(f"📦 Archive mode: {archive}")
+    print(f"📁 Mkdirs      : {mkdirs}")
     print(f"🗂️  Exclude     : {exclude}")
 
     with Connection(source_instance, config, personal_config=personal_config) as src, Connection(dest_instance, config, personal_config=personal_config) as dest:
@@ -43,6 +45,19 @@ def transfer_via_rsync(*,
         ssh_opts_dest = "-o StrictHostKeyChecking=no"
         if dest.port is not None:
             ssh_opts_dest += f" -p {dest.port}"
+
+        # Create destination directory if mkdirs is enabled
+        if mkdirs:
+            # Determine the parent directory to create
+            # If dest_path ends with /, it's a directory; otherwise get its parent
+            if dest_path.endswith("/"):
+                dest_dir = dest_path.rstrip("/")
+            else:
+                dest_dir = os.path.dirname(dest_path.rstrip("/")) or "."
+            
+            if dest_dir != ".":
+                print(f"📂 Creating destination directory: {dest_dir}")
+                dest.run(f'mkdir -p "{dest_dir}"')
 
         if archive:
             remote_zip_path = f"/tmp/xfer_{tid}.zip"
