@@ -338,7 +338,8 @@ class Nami():
         user = config["user"]
         port = config.get("port")
         
-        cmd = ["ssh-copy-id", "-f", "-i", key_file]
+        cmd = ["ssh-copy-id", "-f", "-i", key_file,
+               "-o", "StrictHostKeyChecking=no", "-o", "BatchMode=yes"]
         if port is not None:
             cmd.extend(["-p", str(port)])
         cmd.append(f"{user}@{host}")
@@ -446,7 +447,7 @@ class Nami():
         if total_removed > 0:
             print(f"\n🔑 Total: Removed {total_removed} key(s) across {len(instances)} instance(s)")
 
-    def add_ssh_key(self, public_key, instance_name=None):
+    def add_ssh_key(self, public_keys, instance_name=None):
         if instance_name is None:
             instances = list(self.config["instances"].keys())
         else:
@@ -459,8 +460,10 @@ class Nami():
         import tempfile
         import os
         
+        key_count = len(public_keys)
         with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.pub') as tmp:
-            tmp.write(public_key.strip() + '\n')
+            for key in public_keys:
+                tmp.write(key.strip() + '\n')
             tmp_filename = tmp.name
         
         results = {}
@@ -475,12 +478,13 @@ class Nami():
         
         os.unlink(tmp_filename)
         
+        label = f"{key_count} SSH key(s)" if key_count > 1 else "SSH key"
         for name in instances:
             success, error = results.get(name, (False, "Unknown error"))
             if success:
-                print(f"✅ Added SSH key to {name}")
+                print(f"✅ Added {label} to {name}")
             else:
-                print(f"❌ Failed to add SSH key to {name}: {error}")
+                print(f"❌ Failed to add {label} to {name}: {error}")
 
 
 # -----------------------------------------------------------------------------
@@ -531,8 +535,9 @@ def main():
     ssh_key_parser = subparsers.add_parser("ssh-key", help="Manage SSH keys on instances")
     ssh_key_subparsers = ssh_key_parser.add_subparsers(dest="ssh_key_action", help="SSH key actions")
     
-    ssh_key_add_parser = ssh_key_subparsers.add_parser("add", help="Add SSH public key to instance(s)")
-    ssh_key_add_parser.add_argument("public_key", help="The public key string to add")
+    ssh_key_add_parser = ssh_key_subparsers.add_parser("add", help="Add SSH public key(s) to instance(s)")
+    ssh_key_add_parser.add_argument("public_keys", nargs="*", help="One or more public key strings to add")
+    ssh_key_add_parser.add_argument("--from-file", dest="from_file", help="Read public keys from a file (one key per line)")
     ssh_key_add_parser.add_argument("--instance", help="Specific instance name (if not provided, add to all)")
     
     ssh_key_remove_parser = ssh_key_subparsers.add_parser("remove", help="Remove SSH key(s) matching a pattern from instance(s)")
@@ -630,7 +635,21 @@ def main():
             print("❌ Please specify 'set' or 'show' for config command")
     elif args.command == "ssh-key":
         if args.ssh_key_action == "add":
-            vm.add_ssh_key(args.public_key, args.instance)
+            keys = list(args.public_keys) if args.public_keys else []
+            if args.from_file:
+                try:
+                    with open(args.from_file, "r") as f:
+                        for line in f:
+                            line = line.strip()
+                            if line and not line.startswith("#"):
+                                keys.append(line)
+                except FileNotFoundError:
+                    print(f"❌ File not found: {args.from_file}")
+                    sys.exit(1)
+            if not keys:
+                print("❌ No keys provided. Pass keys as arguments or use --from-file.")
+                sys.exit(1)
+            vm.add_ssh_key(keys, args.instance)
         elif args.ssh_key_action == "remove":
             vm.remove_ssh_key(args.pattern, args.instance)
         else:
