@@ -52,6 +52,7 @@ def upload_to_s3(*,
                 exclude: str = "",
                 include: str = "",
                 archive: bool = False,
+                delete: bool = False,
                 operation_id: int | None = None,
                 endpoint: str | None = None,
                 config: dict = None,
@@ -94,7 +95,7 @@ def upload_to_s3(*,
             src.run(
                 f'''
                 if [ -d "{source_path}" ]; then
-                    {aws_env}aws {profile_flag}{endpoint_flag}s3 sync "{source_path}" "{dest_path}" {aws_exclude_flags} {aws_include_flags}
+                    {aws_env}aws {profile_flag}{endpoint_flag}s3 sync "{source_path}" "{dest_path}" {aws_exclude_flags} {aws_include_flags} {"--delete" if delete else ""}
                 elif [ -f "{source_path}" ]; then
                     {aws_env}aws {profile_flag}{endpoint_flag}s3 cp "{source_path}" "{dest_path}"
                 else
@@ -114,6 +115,7 @@ def download_from_s3(*,
                     exclude: str = "",
                     include: str = "",
                     archive: bool = False,
+                    delete: bool = False,
                     operation_id: int | None = None,
                     endpoint: str | None = None,
                     config: dict = None,
@@ -153,7 +155,7 @@ def download_from_s3(*,
                 mkdir -p "$(dirname "{dest_path}")" || true
                 # Attempt to copy as a single file first; if that fails, fallback to sync for directories.
                 {aws_env}aws {profile_flag}{endpoint_flag}s3 cp "{source_path}" "{dest_path}" || \
-                {aws_env}aws {profile_flag}{endpoint_flag}s3 sync "{source_path}" "{dest_path}" {aws_exclude_flags} {aws_include_flags}
+                {aws_env}aws {profile_flag}{endpoint_flag}s3 sync "{source_path}" "{dest_path}" {aws_exclude_flags} {aws_include_flags} {"--delete" if delete else ""}
                 '''
             )
         print("✅ Download completed!")

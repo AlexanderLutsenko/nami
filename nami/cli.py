@@ -579,6 +579,7 @@ def main():
     from_s3_parser.add_argument("--archive", action="store_true")
     from_s3_parser.add_argument("--aws_profile")
     from_s3_parser.add_argument("--endpoint", help="Custom S3 endpoint URL")
+    from_s3_parser.add_argument("--delete", action="store_true", help="Delete destination files that don't exist in source (sync only)")
 
     # Upload to S3
     to_s3_parser = subparsers.add_parser("to_s3", help="Upload files/folders from an instance to S3")
@@ -590,6 +591,7 @@ def main():
     to_s3_parser.add_argument("--archive", action="store_true")
     to_s3_parser.add_argument("--aws_profile")
     to_s3_parser.add_argument("--endpoint", help="Custom S3 endpoint URL")
+    to_s3_parser.add_argument("--delete", action="store_true", help="Delete destination files that don't exist in source (sync only)")
 
     # Template command
     template_parser = subparsers.add_parser("template", help="Execute a template on an instance")
@@ -706,6 +708,7 @@ def main():
             exclude=args.exclude_patterns or "",
             include=args.include_patterns or "",
             archive=args.archive,
+            delete=args.delete,
             endpoint=args.endpoint,
             config=vm.config,
             personal_config=vm.personal_config
@@ -719,6 +722,7 @@ def main():
             exclude=args.exclude_patterns or "",
             include=args.include_patterns or "",
             archive=args.archive,
+            delete=args.delete,
             endpoint=args.endpoint,
             config=vm.config,
             personal_config=vm.personal_config
