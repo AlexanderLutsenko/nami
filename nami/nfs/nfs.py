@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import concurrent.futures
+import random
 import re
+import time
 from typing import Dict, Tuple, List
 
 from ..connection import SystemSSHConnection as Connection
+
+_SSH_RETRIES = 4
+_SSH_RETRY_BASE_DELAY = 3
 
 
 def _sanitize_name_for_path(name: str) -> str:
@@ -13,6 +18,18 @@ def _sanitize_name_for_path(name: str) -> str:
     Replaces any character that is not alphanumeric or dash with a dash.
     """
     return re.sub(r"[^a-zA-Z0-9_-]", "-", name)
+
+
+def _run_with_ssh_retry(func):
+    """Retry on transient SSH failures (e.g. MaxStartups exceeded)."""
+    for attempt in range(_SSH_RETRIES):
+        try:
+            return func()
+        except Exception as e:
+            if attempt < _SSH_RETRIES - 1 and "kex_exchange_identification" in str(e):
+                time.sleep(_SSH_RETRY_BASE_DELAY * (2 ** attempt) + random.uniform(0, 2))
+                continue
+            raise
 
 
 def _mount_peer(
@@ -31,13 +48,12 @@ def _mount_peer(
     Returns a tuple: (client_instance, mount_dir, success, message)
     """
     mount_dir = f"{mount_base.rstrip('/')}/{_sanitize_name_for_path(peer_label)}"
+    nfs_opts = f"vers={nfs_version},soft,timeo=10,retrans=3"
 
     script = f'''
         set -euo pipefail
         MOUNT_DIR="{mount_dir}"
         PEER_SPEC="{peer_ip}:{export_dir}"
-        NFS_OPTS="-t nfs -o vers={nfs_version}"
-        CURRENT_SPEC="$(findmnt -n -o SOURCE --target "$MOUNT_DIR" 2>/dev/null || true)"
 
         # If real dir is non-empty and not a mountpoint → do nothing to avoid masking data
         if [ -d "$MOUNT_DIR" ] && [ "$(ls -A \"$MOUNT_DIR\" 2>/dev/null)" ] && ! mountpoint -q "$MOUNT_DIR"; then
@@ -47,24 +63,19 @@ def _mount_peer(
 
         sudo mkdir -p "$MOUNT_DIR"
 
-        # If already mounted to a different source, unmount first so we can switch exports
-        if mountpoint -q "$MOUNT_DIR" 2>/dev/null && [ "x$CURRENT_SPEC" != "x$PEER_SPEC" ]; then
-            sudo umount -l "$MOUNT_DIR" || true
-        fi
-
-        # Mount (idempotent): if still mounted, attempt remount; else mount fresh
+        # Always do a full unmount + mount cycle to pick up server-side export changes
         if mountpoint -q "$MOUNT_DIR" 2>/dev/null; then
-            sudo mount -o remount "$MOUNT_DIR" || sudo mount $NFS_OPTS "$PEER_SPEC" "$MOUNT_DIR"
-        else
-            sudo mount $NFS_OPTS "$PEER_SPEC" "$MOUNT_DIR"
+            sudo umount -f "$MOUNT_DIR" 2>/dev/null || sudo umount -l "$MOUNT_DIR" 2>/dev/null || true
+            sleep 1
         fi
+        sudo mount -t nfs -o {nfs_opts} "$PEER_SPEC" "$MOUNT_DIR"
 
         # Update fstab: remove any line for this mountpoint, then append the current spec
         if [ -f /etc/fstab ]; then
             sudo sed -i "\\| {mount_dir} nfs |d" /etc/fstab
         fi
         if ! grep -qsF "{peer_ip}:{export_dir} {mount_dir} nfs" /etc/fstab 2>/dev/null; then
-            echo "{peer_ip}:{export_dir} {mount_dir} nfs defaults 0 0" | sudo tee -a /etc/fstab >/dev/null
+            echo "{peer_ip}:{export_dir} {mount_dir} nfs {nfs_opts},_netdev 0 0" | sudo tee -a /etc/fstab >/dev/null
         fi
         sudo systemctl daemon-reload || true
 
@@ -78,8 +89,10 @@ def _mount_peer(
     '''
 
     try:
-        with Connection(client_instance, config, personal_config=personal_config) as client_conn:
-            result = client_conn.run(script, capture=True)
+        def do_mount():
+            with Connection(client_instance, config, personal_config=personal_config) as conn:
+                return conn.run(script, capture=True)
+        result = _run_with_ssh_retry(do_mount)
         return (client_instance, mount_dir, True, "mounted", (result.stdout or ""))
     except Exception as e:
         return (client_instance, mount_dir, False, str(e), "")
@@ -89,10 +102,16 @@ def _setup_server_export(
     *,
     instance_name: str,
     export_dir: str,
+    peer_ips: List[str],
     config: dict,
     personal_config: dict | None,
 ) -> Tuple[str, bool, str, str]:
-    """Ensure NFS server is installed and export_dir is exported on instance."""
+    """Ensure NFS server is installed and export_dir is exported on instance.
+
+    Also opens TCP port 2049 in ufw (if active) for each peer IP so that
+    cross-instance NFS mounts are not blocked by host firewalls.
+    """
+    peer_ips_str = " ".join(peer_ips)
     script = f'''
         set -euo pipefail
         EXPORT_DIR="{export_dir}"
@@ -110,19 +129,66 @@ def _setup_server_export(
             sudo chmod 777 "$EXPORT_DIR"
         fi
 
-        # De-dupe any existing export line for this directory
-        if [ -f /etc/exports ]; then
-            sudo sed -i "\|^$EXPORT_DIR\\s|d" /etc/exports
-        fi
-        echo "$EXPORT_DIR *(rw,sync,no_subtree_check,no_root_squash)" | sudo tee -a /etc/exports >/dev/null
+        # NFS cannot follow absolute symlinks that point to other filesystems;
+        # the client resolves them locally and fails.  Replace such symlinks
+        # with bind mounts so NFS can serve the content properly.
+        EXPORT_DEV=$(stat -c %d "$EXPORT_DIR")
+        for LINK in $(find "$EXPORT_DIR" -maxdepth 1 -type l 2>/dev/null); do
+            TARGET=$(readlink -f "$LINK" 2>/dev/null || true)
+            if [ -d "$TARGET" ]; then
+                TARGET_DEV=$(stat -c %d "$TARGET" 2>/dev/null || echo "$EXPORT_DEV")
+                if [ "$EXPORT_DEV" != "$TARGET_DEV" ] && ! mountpoint -q "$LINK" 2>/dev/null; then
+                    sudo rm "$LINK"
+                    sudo mkdir -p "$LINK"
+                    sudo mount --bind "$TARGET" "$LINK"
+                    if ! grep -qsF "$TARGET $LINK none bind" /etc/fstab; then
+                        echo "$TARGET $LINK none bind 0 0" | sudo tee -a /etc/fstab >/dev/null
+                    fi
+                    echo "NFS fix: converted symlink $LINK to bind mount of $TARGET"
+                fi
+            fi
+        done
 
+        # Build /etc/exports:
+        #   - Root export gets fsid=0 (required for NFSv4 pseudo-root).
+        #   - Every block-device-backed sub-mount gets an explicit export with a
+        #     unique fsid.  This is necessary because bind mounts on the same
+        #     device receive duplicate auto-assigned fsids from the kernel,
+        #     which causes stale-handle errors on the client.
+        #   - Only /dev/* sources are exported; this automatically excludes
+        #     virtual filesystems (proc, sysfs, tmpfs, hugetlbfs, …) and
+        #     NFS client mounts (which would create circular re-exports).
+        sudo sed -i "\|^${{EXPORT_DIR}}[[:space:]]|d" /etc/exports
+        sudo sed -i "/# nami-nfs/d" /etc/exports
+        echo "$EXPORT_DIR *(rw,sync,no_subtree_check,no_root_squash,fsid=0) # nami-nfs" | sudo tee -a /etc/exports >/dev/null
+
+        FSID_COUNTER=1
+        while read MNT SRC; do
+            case "$SRC" in /dev/*) ;; *) continue ;; esac
+            echo "$MNT *(rw,sync,no_subtree_check,no_root_squash,fsid=$FSID_COUNTER) # nami-nfs" | sudo tee -a /etc/exports >/dev/null
+            echo "NFS: exporting sub-mount $MNT (fsid=$FSID_COUNTER)"
+            FSID_COUNTER=$((FSID_COUNTER + 1))
+        done < <(findmnt -Rrn -o TARGET,SOURCE "$EXPORT_DIR" | tail -n +2)
+
+        sudo systemctl stop nfs-kernel-server
+        sudo exportfs -f
         sudo exportfs -ra
-        sudo systemctl restart nfs-kernel-server
+        sudo systemctl start nfs-kernel-server
+
+        # Open NFS port for each peer if ufw is active
+        if command -v ufw >/dev/null 2>&1 && sudo ufw status | head -1 | grep -q active; then
+            for PEER_IP in {peer_ips_str}; do
+                sudo ufw allow from "$PEER_IP" to any port 2049 proto tcp >/dev/null 2>&1 || true
+            done
+            echo "Firewall: allowed port 2049/tcp for {len(peer_ips)} peer(s)"
+        fi
     '''
 
     try:
-        with Connection(instance_name, config, personal_config=personal_config) as conn:
-            result = conn.run(script, capture=True)
+        def do_export():
+            with Connection(instance_name, config, personal_config=personal_config) as conn:
+                return conn.run(script, capture=True)
+        result = _run_with_ssh_retry(do_export)
         return (instance_name, True, "exported", (result.stdout or ""))
     except Exception as e:
         return (instance_name, False, str(e), "")
@@ -266,6 +332,13 @@ def setup_and_mount_full_mesh(
     if unknown:
         raise ValueError(f"Unknown instance names: {', '.join(unknown)}")
 
+    # Collect all peer IPs so each server can open its firewall for them
+    peer_ips: List[str] = []
+    for name in instances:
+        host = str(all_instances[name].get("host", ""))
+        if host:
+            peer_ips.append(host)
+
     print("──────────── NFS Server Exports ────────────")
     print(f"Export dir : {export_dir}")
     print(f"Instances  : {len(instances)} → {', '.join(instances)}")
@@ -278,6 +351,7 @@ def setup_and_mount_full_mesh(
                 _setup_server_export,
                 instance_name=name,
                 export_dir=export_dir,
+                peer_ips=peer_ips,
                 config=config,
                 personal_config=personal_config,
             ): name for name in instances
@@ -306,4 +380,3 @@ def setup_and_mount_full_mesh(
         config=config,
         personal_config=personal_config,
     )
-
