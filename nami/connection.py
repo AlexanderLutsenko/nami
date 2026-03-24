@@ -134,16 +134,15 @@ class SystemSSHConnection:
 
     def _build_remote_command(self, command: str, capture: bool):
         cmd_clean = textwrap.dedent(command).strip()
-        remote_cmd = (
-            f"bash -c 'set -e -o pipefail; {cmd_clean}'" if capture
-            else f"bash -i -c 'set +m; set -e -o pipefail; {cmd_clean}'"
-        )
+        delimiter = "NAMI_SCRIPT_EOF"
+        preamble = "set -e -o pipefail" if capture else "set +m\nset -e -o pipefail"
+        remote_cmd = f"bash <<'{delimiter}'\n{preamble}\n{cmd_clean}\n{delimiter}"
         ssh_tty_flag = "-T" if capture else "-tt"
         base_without_ssh = self._base_cmd[1:-1]  # drop leading 'ssh' and trailing 'user@host'
         host = self._base_cmd[-1]
         extra_opts = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=5"] if capture else []
         full_cmd = ["ssh", ssh_tty_flag] + base_without_ssh + extra_opts + [host, remote_cmd]
-        return full_cmd, remote_cmd
+        return full_cmd, cmd_clean
 
     def run(self, command: str, capture: bool = False) -> subprocess.CompletedProcess:
         if self.is_local:
@@ -152,8 +151,8 @@ class SystemSSHConnection:
         else:
             port_display = f":{self.port}" if self.port is not None else ""
             print(f"🔗 Establishing SSH connection to {self.instance_name} ({self.user}@{self.host}{port_display}) …")
-            full_cmd, remote_cmd = self._build_remote_command(command, capture)
-            popen_command, shell, print_command, is_remote = full_cmd, False, remote_cmd, True
+            full_cmd, display_cmd = self._build_remote_command(command, capture)
+            popen_command, shell, print_command, is_remote = full_cmd, False, display_cmd, True
 
         return self._run_process(
             popen_command,
