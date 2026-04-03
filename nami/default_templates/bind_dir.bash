@@ -2,52 +2,187 @@
 # Bind-mounts a directory (dst_dir) to a new location (src_dir) on a different
 # filesystem, preserving existing contents and persisting the mount across reboots.
 #
-# Use case: relocating high-traffic directories like /tmp from a small disk to a
-# larger one without changing any paths seen by the OS or running processes.
+# Use case: relocating high-traffic directories like /var or /home from a small
+# disk to a larger one without changing any paths seen by the OS or processes.
 #
 # Steps performed:
-#   1. Copy existing contents of dst_dir to src_dir (skipping unreadable system dirs)
-#   2. Bind-mount src_dir over dst_dir so all writes go to the new location
-#   3. Add the bind-mount to /etc/fstab for persistence across reboots
-#   4. Mount the original underlying device separately and wipe the now-hidden
-#      contents of dst_dir on it, freeing space on the old disk
+#   1. Snapshot top-level symlinks in dst_dir (e.g. /var/run -> ../run)
+#   2. rsync dst_dir to src_dir (abort on error)
+#   3. Restore symlinks that rsync materialized as real directories
+#   4. Bind-mount src_dir over dst_dir
+#   5. Add the bind-mount to /etc/fstab for persistence across reboots
+#   6. Verify the migration
 #
-# Required env vars (no defaults — script will abort if not set):
+# Rollback mode (ROLLBACK=1):
+#   Unmounts the bind, removes the fstab entry, restoring the original
+#   directory.  The copy on the new disk is left for manual removal.
+#
+# Cleanup mode (CLEANUP=1):
+#   Removes the original data hidden behind the bind-mount using a mount
+#   namespace (the live mount is not affected).
+#
+# Required template vars:
 #   src_dir  — new location to store the data (on the large disk)
-#   dst_dir  — directory to redirect (e.g. /tmp)
+#   dst_dir  — directory to redirect (e.g. /var)
 #
 # Usage:
-#   src_dir=/media/16TBNVME/tmp dst_dir=/tmp ./bind_dir.sh
+#   src_dir=/media/16TBNVME/var dst_dir=/var ./bind_dir.sh
+#
+#   # Undo the migration (unmount, restore original):
+#   ROLLBACK=1 src_dir=/media/16TBNVME/var dst_dir=/var ./bind_dir.sh
+#
+#   # After verifying the migration is healthy, free old disk space:
+#   CLEANUP=1 src_dir=/media/16TBNVME/var dst_dir=/var ./bind_dir.sh
 #
 # Notes:
 #   - Must be run as a user with passwordless sudo, or as root
-#   - rsync skips unreadable systemd-private dirs (they are recreated by systemd)
-#   - The original data on the old disk is deleted after the bind-mount is in place
+#   - Stop services that write heavily to dst_dir before running (e.g. Docker)
 
-set -e
-# Copy contents to new location
-mkdir -p "${src_dir}"
-rsync -a --ignore-errors --quiet "${dst_dir}/" "${src_dir}/" || true
+set -euo pipefail
 
-# Bind-mount new location over dst
-sudo mount --bind "${src_dir}" "${dst_dir}"
-
-# Make it persistent
-if grep -q "${src_dir}" /etc/fstab; then
-    echo "fstab entry already exists, skipping"
-else
-    echo "${src_dir}  ${dst_dir}  none  bind  0  0" | sudo tee -a /etc/fstab
-    echo "fstab entry added"
+# ── Pre-flight checks ──────────────────────────────────────────────────
+if [ -z "${src_dir:-}" ] || [ -z "${dst_dir:-}" ]; then
+    echo "ERROR: both src_dir and dst_dir must be set." >&2
+    echo "Usage: src_dir=/mnt/big/var dst_dir=/var $0" >&2
+    exit 1
 fi
 
-# Clean up original contents on the old device
-# Query / since dst_dir was on the root filesystem before the bind-mount
-root_dev=$(findmnt -n -o SOURCE --target / --first-only)
-bind_root=$(mktemp -d)
-sudo mount "$root_dev" "$bind_root"
-sudo rm -rf "$bind_root/${dst_dir}"/*
-sudo umount "$bind_root"
-rmdir "$bind_root"
+if [ ! -d "${dst_dir}" ]; then
+    echo "ERROR: dst_dir '${dst_dir}' does not exist or is not a directory." >&2
+    exit 1
+fi
 
-echo "Done. ${dst_dir} is now bind-mounted from ${src_dir}:"
+is_bind_active() {
+    [ -d "${src_dir}" ] &&
+    [ "$(stat -c '%d:%i' "${src_dir}")" = "$(stat -c '%d:%i' "${dst_dir}")" ]
+}
+
+# ── Rollback mode ─────────────────────────────────────────────────────
+if [ "${ROLLBACK:-0}" = "1" ]; then
+    if ! is_bind_active; then
+        echo "${dst_dir} is not bind-mounted from ${src_dir}, nothing to undo."
+        exit 0
+    fi
+
+    echo "Unmounting bind-mount..."
+    sudo umount "${dst_dir}"
+
+    if grep -q "${src_dir}" /etc/fstab; then
+        sudo sed -i "\|${src_dir}|d" /etc/fstab
+        echo "fstab entry removed."
+    fi
+
+    echo "Original data at ${dst_dir} is back."
+    df -h "${dst_dir}"
+
+    if [ -d "${src_dir}" ]; then
+        copy_size=$(sudo du -sh "${src_dir}" | cut -f1)
+        echo "Copy still at ${src_dir} (${copy_size}). Remove manually if no longer needed:"
+        echo "  sudo rm -rf ${src_dir}"
+    fi
+
+    echo "Rollback complete."
+    exit 0
+fi
+
+# ── Cleanup mode ───────────────────────────────────────────────────────
+if [ "${CLEANUP:-0}" = "1" ]; then
+    if ! is_bind_active; then
+        echo "ERROR: ${dst_dir} is not bind-mounted from ${src_dir}."
+        echo "Run the migration first, then re-run with CLEANUP=1." >&2
+        exit 1
+    fi
+
+    echo "Measuring old data hidden behind the bind-mount..."
+    old_size=$(sudo unshare -m bash -c "
+        umount '${dst_dir}' 2>/dev/null
+        du -sh '${dst_dir}' 2>/dev/null | cut -f1
+    " || echo "unknown")
+    echo "Old data size: ${old_size}"
+
+    echo "Removing old data behind the bind-mount (live mount is unaffected)..."
+    sudo unshare -m bash -c "
+        umount '${dst_dir}'
+        find '${dst_dir}' -mindepth 1 -delete
+    "
+    echo "Old data removed."
+
+    df -h "${dst_dir}"
+    echo "Cleanup complete."
+    exit 0
+fi
+
+# ── Idempotency ────────────────────────────────────────────────────────
+if is_bind_active; then
+    echo "${dst_dir} is already bind-mounted from ${src_dir}, nothing to do."
+    exit 0
+fi
+
+# ── Disk space check ──────────────────────────────────────────────────
+src_ancestor="${src_dir}"
+while [ ! -d "${src_ancestor}" ]; do
+    src_ancestor=$(dirname "${src_ancestor}")
+done
+
+needed_kb=$(sudo du -sk "${dst_dir}" | cut -f1)
+avail_kb=$(df --output=avail "${src_ancestor}" | tail -1 | tr -d ' ')
+if [ "${avail_kb}" -lt "${needed_kb}" ]; then
+    needed_h=$(numfmt --to=iec --from-unit=1024 "${needed_kb}")
+    avail_h=$(numfmt --to=iec --from-unit=1024 "${avail_kb}")
+    echo "ERROR: not enough space on $(df --output=target "${src_ancestor}" | tail -1 | tr -d ' ')." >&2
+    echo "  Need ~${needed_h}, available ${avail_h}." >&2
+    exit 1
+fi
+
+# ── Snapshot top-level symlinks ────────────────────────────────────────
+symlink_snapshot=$(mktemp)
+sudo find "${dst_dir}" -maxdepth 1 -type l -printf '%f\t%l\n' > "$symlink_snapshot"
+
+# ── Copy data ─────────────────────────────────────────────────────────
+echo "Copying ${dst_dir} → ${src_dir} ..."
+sudo mkdir -p "${src_dir}"
+sudo chmod --reference="${dst_dir}" "${src_dir}"
+sudo chown --reference="${dst_dir}" "${src_dir}"
+sudo rsync -a "${dst_dir}/" "${src_dir}/"
+echo "Copy complete."
+
+# ── Restore symlinks ─────────────────────────────────────────────────
+while IFS=$'\t' read -r name target; do
+    dest="${src_dir}/${name}"
+    if [ -d "$dest" ] && [ ! -L "$dest" ]; then
+        echo "Restoring symlink ${dest} → ${target}"
+        sudo rm -rf "$dest"
+        sudo ln -sf "$target" "$dest"
+    fi
+done < "$symlink_snapshot"
+rm -f "$symlink_snapshot"
+
+# ── Bind-mount ────────────────────────────────────────────────────────
+sudo mount --bind "${src_dir}" "${dst_dir}"
+
+# ── fstab persistence ────────────────────────────────────────────────
+if grep -q "${src_dir}" /etc/fstab; then
+    echo "fstab entry already exists, skipping."
+else
+    echo "${src_dir}  ${dst_dir}  none  bind  0  0" | sudo tee -a /etc/fstab
+    echo "fstab entry added."
+fi
+
+# ── Verification ──────────────────────────────────────────────────────
+echo ""
+echo "Verifying migration..."
+src_count=$(sudo find "${src_dir}" -mindepth 1 | wc -l)
+dst_count=$(sudo find "${dst_dir}" -mindepth 1 | wc -l)
+
+if [ "${dst_count}" -eq "${src_count}" ]; then
+    echo "OK: bind-mount is consistent (${dst_count} entries)."
+else
+    echo "WARNING: entry count mismatch — src=${src_count}, dst(mounted)=${dst_count}" >&2
+fi
+
+echo ""
+echo "Done. ${dst_dir} is now bind-mounted from ${src_dir}."
 df -h "${dst_dir}"
+echo ""
+echo "Original data on the old disk is untouched. Once verified, free the old space with:"
+echo "  CLEANUP=1 src_dir=${src_dir} dst_dir=${dst_dir} $0"

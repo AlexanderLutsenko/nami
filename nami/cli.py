@@ -1,4 +1,6 @@
 import os
+import re
+import shlex
 import sys
 import yaml
 import argparse
@@ -27,11 +29,30 @@ class Nami():
         self.personal_config = self.load_personal_config()
 
     def load_config(self):
-        """Load configuration from YAML file."""
+        """Load configuration from YAML file, preserving key order."""
         if self.config_file.exists():
             with open(self.config_file, 'r') as f:
-                return yaml.safe_load(f) or {}
-        # Initialise default structure if missing
+                raw = f.read()
+            config = yaml.safe_load(raw) or {}
+            instances = config.get("instances")
+            if instances:
+                ordered_keys = []
+                in_instances = False
+                for line in raw.splitlines():
+                    if line.rstrip() == 'instances:':
+                        in_instances = True
+                        continue
+                    if in_instances:
+                        if line and not line[0].isspace():
+                            break
+                        m = re.match(r'^ {2,3}(\S+):', line)
+                        if m and m.group(1) in instances:
+                            ordered_keys.append(m.group(1))
+                config["instances"] = {k: instances[k] for k in ordered_keys}
+                for k in instances:
+                    if k not in config["instances"]:
+                        config["instances"][k] = instances[k]
+            return config
         return {"instances": {}, "variables": {}}
 
     def load_personal_config(self):
@@ -83,7 +104,7 @@ class Nami():
         dumper = yaml.SafeDumper
         dumper.add_representer(type(None), lambda d, _: d.represent_scalar('tag:yaml.org,2002:null', ''))
         with open(self.config_file, 'w') as f:
-            yaml.dump(self.config, f, Dumper=dumper, default_flow_style=False, indent=2)
+            yaml.dump(self.config, f, Dumper=dumper, default_flow_style=False, sort_keys=False, indent=2)
 
     def add_instance(self, name, host, port, user="root", local_port=None, description=""):
         """Add a new instance to the configuration."""
@@ -146,7 +167,6 @@ class Nami():
         elapsed_time = time.time() - start_time
         print(f"✅ All checks completed in {elapsed_time:.1f}s\n")
         
-        # Display results in original order
         for name in self.config["instances"].keys():
             config, status, gpu_info_lines = instance_results[name]
             
@@ -208,29 +228,36 @@ class Nami():
             raise ValueError(f"Missing variable in template: {e}")
 
     def execute_template(self, instance_name, template_name, variables=None):
-        # Ensure the instance exists before attempting to connect.
         variables = variables or {}
         template_content = self.get_template(template_name)
-        
-        import re
-        placeholder_pattern = re.compile(r"\$\{?([_a-zA-Z][_a-zA-Z0-9]*)\}?")
-        placeholders = set(placeholder_pattern.findall(template_content))
 
-        # Error on unused variables
-        unused = set(variables.keys()) - placeholders
+        # Identifiers that appear as $var or ${var} anywhere in the template.
+        ref_pattern = re.compile(r"\$\{?([_a-zA-Z][_a-zA-Z0-9]*)\}?")
+        referenced = set(ref_pattern.findall(template_content))
+
+        unused = set(variables.keys()) - referenced
         if unused:
             raise ValueError(f"Unused template variables: {', '.join(sorted(unused))}")
 
-        rendered_script = self.render_template(template_content, variables)
+        all_vars = {
+            **self.config.get("variables", {}),
+            **self.personal_config,
+            **variables,
+        }
 
-        # Warn if placeholders remain unfilled after rendering
-        remaining = set(placeholder_pattern.findall(rendered_script))
-        if remaining:
-            print(f"⚠️  Warning: unfilled placeholders -> {', '.join(sorted(remaining))}")
+        exports = []
+        for key, value in all_vars.items():
+            if key in referenced:
+                exports.append(f"export {key}={shlex.quote(str(value))}")
+
+        if exports:
+            script = "\n".join(exports) + "\n" + template_content
+        else:
+            script = template_content
 
         print(f"🔧 Executing template '{template_name}' on {instance_name}...")
         try:
-            self.run_ssh_command(instance_name, rendered_script)
+            self.run_ssh_command(instance_name, script)
             print(f"✅ Template '{template_name}' executed successfully on {instance_name}")
             return True
         except Exception as e:
@@ -729,15 +756,20 @@ def main():
         )
     elif args.command == "template":
         template_vars: dict[str, str] = {}
-        if len(unknown_args) % 2 != 0:
-            print("❌ Template variables must be provided as '--key value' pairs.")
-            return
-        for flag, value in zip(unknown_args[0::2], unknown_args[1::2]):
-            if not flag.startswith("--"):
-                print(f"⚠️  Ignoring unexpected token '{flag}' (flags should start with --)")
-                continue
-            key = flag[2:]
-            template_vars[key] = value
+        rest = list(unknown_args)
+        while rest:
+            token = rest.pop(0)
+            if token.startswith("--"):
+                if not rest:
+                    print(f"❌ Flag '{token}' is missing a value.")
+                    return
+                template_vars[token[2:]] = rest.pop(0)
+            elif "=" in token:
+                key, value = token.split("=", 1)
+                template_vars[key] = value
+            else:
+                print(f"❌ Unexpected token '{token}'. Use '--key value' or 'KEY=value'.")
+                return
         vm.execute_template(args.instance, args.template, template_vars)
     else:
         print(f"❌ Unknown command: {args.command}")
