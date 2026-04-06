@@ -118,12 +118,23 @@ if is_bind_active; then
     exit 0
 fi
 
-# ── Disk space check ──────────────────────────────────────────────────
+# ── Same-filesystem guard ─────────────────────────────────────────────
 src_ancestor="${src_dir}"
 while [ ! -d "${src_ancestor}" ]; do
     src_ancestor=$(dirname "${src_ancestor}")
 done
 
+src_dev=$(stat -c '%d' "${src_ancestor}")
+dst_dev=$(stat -c '%d' "${dst_dir}")
+if [ "${src_dev}" = "${dst_dev}" ]; then
+    echo "ERROR: ${src_ancestor} and ${dst_dir} are on the same filesystem." >&2
+    echo "  src resolves to: $(df --output=source "${src_ancestor}" | tail -1 | tr -d ' ')" >&2
+    echo "  dst resolves to: $(df --output=source "${dst_dir}" | tail -1 | tr -d ' ')" >&2
+    echo "  Bind-mounting within the same disk is pointless. Check your mount points." >&2
+    exit 1
+fi
+
+# ── Disk space check ──────────────────────────────────────────────────
 needed_kb=$(sudo du -sk "${dst_dir}" | cut -f1)
 avail_kb=$(df --output=avail "${src_ancestor}" | tail -1 | tr -d ' ')
 if [ "${avail_kb}" -lt "${needed_kb}" ]; then
