@@ -90,8 +90,8 @@ nami add <instance_name> <host> <port> [--user USER] [--local-port PORT] [--desc
 # Remove an instance
 nami remove <instance_name>
 
-# Add SSH public key to instance(s)
-nami ssh-key add "<public_key>" [--instance <instance_name>]
+# Add SSH public key(s) to instance(s)
+nami ssh-key add "<public_key>" ... [--from-file <path>] [--instance <instance_name>]
 
 # Remove SSH key(s) matching a pattern from instance(s)
 nami ssh-key remove "<pattern>" [--instance <instance_name>]

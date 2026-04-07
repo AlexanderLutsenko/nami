@@ -160,7 +160,7 @@ def _setup_server_export(
         #     NFS client mounts (which would create circular re-exports).
         sudo sed -i "\|^${{EXPORT_DIR}}[[:space:]]|d" /etc/exports
         sudo sed -i "/# nami-nfs/d" /etc/exports
-        echo "$EXPORT_DIR *(rw,sync,no_subtree_check,no_root_squash,fsid=0) # nami-nfs" | sudo tee -a /etc/exports >/dev/null
+        echo "$EXPORT_DIR *(rw,sync,no_subtree_check,no_root_squash,crossmnt,fsid=0) # nami-nfs" | sudo tee -a /etc/exports >/dev/null
 
         FSID_COUNTER=1
         while read MNT SRC; do
