@@ -300,7 +300,8 @@ class Nami():
             with Connection(name, self.config, personal_config=self.personal_config) as conn:
                 result = conn.run(
                     "nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits 2>/dev/null || echo 'NO_GPU'", 
-                    capture=True
+                    capture=True,
+                    timeout=10,
                 )
                 output = result.stdout.strip()
                 if not output or output == "NO_GPU":

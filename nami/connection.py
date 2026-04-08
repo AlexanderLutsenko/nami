@@ -1,5 +1,6 @@
 from __future__ import annotations
 import textwrap
+import threading
 from sty import fg, rs, bg
 import subprocess
 import os
@@ -95,10 +96,11 @@ class SystemSSHConnection:
         print(f"🔗 Executing: {' '.join(cmd)}")
         return subprocess.run(cmd)
 
-    def _run_process(self, popen_command, *, shell: bool, capture: bool, is_remote: bool, print_command: str | None):
+    def _run_process(self, popen_command, *, shell: bool, capture: bool, is_remote: bool, print_command: str | None, timeout: float | None = None):
         """Execute a process, stream or capture output, and raise informative errors.
 
         popen_command can be a command list (preferred) or a string (when shell=True).
+        timeout applies a wall-clock limit (seconds) and kills the process if exceeded.
         """
         if print_command and not capture:
             print(f"{fg.cyan}{print_command}{rs.all}")
@@ -110,6 +112,18 @@ class SystemSSHConnection:
             stderr=subprocess.STDOUT,
             bufsize=0,
         )
+
+        timed_out = threading.Event()
+
+        def _kill_on_timeout():
+            timed_out.set()
+            proc.kill()
+
+        timer = None
+        if timeout is not None:
+            timer = threading.Timer(timeout, _kill_on_timeout)
+            timer.start()
+
         output_chunks: list[str] = []
         try:
             for chunk in iter(lambda: proc.stdout.read(CHUNK_SIZE), b""):
@@ -124,7 +138,16 @@ class SystemSSHConnection:
         except KeyboardInterrupt:
             proc.terminate()
             raise
+        finally:
+            if timer is not None:
+                timer.cancel()
         proc.wait()
+
+        if timed_out.is_set():
+            stdout = ''.join(output_chunks)
+            label = "Remote" if is_remote else "Local"
+            raise RuntimeError(f"{label} command timed out after {timeout}s. Output: {stdout}")
+
         exit_status = proc.returncode
         stdout = ''.join(output_chunks)
         if exit_status != 0:
@@ -140,11 +163,11 @@ class SystemSSHConnection:
         ssh_tty_flag = "-T" if capture else "-tt"
         base_without_ssh = self._base_cmd[1:-1]  # drop leading 'ssh' and trailing 'user@host'
         host = self._base_cmd[-1]
-        extra_opts = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=5"] if capture else []
+        extra_opts = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=3"] if capture else []
         full_cmd = ["ssh", ssh_tty_flag] + base_without_ssh + extra_opts + [host, remote_cmd]
         return full_cmd, cmd_clean
 
-    def run(self, command: str, capture: bool = False) -> subprocess.CompletedProcess:
+    def run(self, command: str, capture: bool = False, timeout: float | None = None) -> subprocess.CompletedProcess:
         if self.is_local:
             # Wrap in interactive Bash to source .bashrc (consistent with remote behavior)
             popen_command, shell, print_command, is_remote = f"bash -i -c 'set -e -o pipefail; {command}'", True, command, False
@@ -160,6 +183,7 @@ class SystemSSHConnection:
             capture=capture,
             is_remote=is_remote,
             print_command=print_command,
+            timeout=timeout,
         )
 
     def __enter__(self):
