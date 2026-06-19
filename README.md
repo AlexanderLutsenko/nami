@@ -9,6 +9,7 @@
 - **📊 GPU monitoring** - GPU utilization and memory tracking
 - **📁 File transfer** - Transfer files between instances directly via rsync or using S3 as intermediary
 - **🗄️ NFS mesh mounting** - Set up and mount shared directories across selected instances
+- **🔑 SSH key & access management** - Add, replace, or remove authorized keys and prune sessions using revoked keys
 - **📜 Template system** - Execute pre-configured bash script templates on remote instances  
 - **⚙️ Configuration management** - Personal and global configuration storage
 
@@ -91,11 +92,31 @@ nami add <instance_name> <host> <port> [--user USER] [--local-port PORT] [--desc
 nami remove <instance_name>
 
 # Add SSH public key(s) to instance(s)
-nami ssh-key add "<public_key>" ... [--from-file <path>] [--instance <instance_name>]
+nami ssh-key add "<public_key>" ... [--from-file <path>] [--instance <instance_name>] [--replace] [--kill-sessions]
 
 # Remove SSH key(s) matching a pattern from instance(s)
 nami ssh-key remove "<pattern>" [--instance <instance_name>]
+
+# Terminate active SSH sessions whose key is not in authorized_keys
+nami ssh-key prune-sessions [--instance <instance_name>]
 ```
+
+By default `ssh-key add` *appends* the given key(s) to each instance's `~/.ssh/authorized_keys`. Use the following flags to change this behavior:
+
+- `--replace` – overwrite the entire `authorized_keys` with the provided key(s)/file instead of appending. Useful for rotating access to an exact allow-list. ⚠️ If the new set omits the key you currently connect with, you'll be locked out on the next login.
+- `--kill-sessions` – after updating the keys, terminate any active SSH sessions whose authenticating key is no longer in `authorized_keys`. The session running the command is never terminated.
+
+`prune-sessions` runs that same termination step on its own, without changing any keys. It inspects the sshd auth log to map each live session to the public key it authenticated with, and disconnects those whose key is absent from the connecting user's `authorized_keys`.
+
+```bash
+# Rotate access on one instance and kick out sessions using now-revoked keys
+nami ssh-key add --from-file ~/keys/allowed_keys --instance gpu-box --replace --kill-sessions
+
+# Enforce the current authorized_keys across all instances
+nami ssh-key prune-sessions
+```
+
+> Note: `prune-sessions` (and `--kill-sessions`) require root or passwordless sudo on the target, since reading the auth log and signaling sshd sessions are privileged operations. Detection relies on sshd logging public-key fingerprints (standard on modern OpenSSH) and Linux `/proc`.
 
 #### Configuration
 ```bash
@@ -134,7 +155,7 @@ nami to_s3 \
     [--aws_profile PROFILE]
 
 # Download from S3  
-nami from_s3 
+nami from_s3 \
     --dest_instance INSTANCE \
     --source_path S3_PATH \
     --dest_path PATH \

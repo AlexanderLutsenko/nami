@@ -17,6 +17,108 @@ from .connection import SystemSSHConnection as Connection
 import base64
 
 
+# Remote (POSIX sh) script that terminates active SSH sessions for the current
+# user whose authenticating public-key fingerprint is no longer present in
+# ~/.ssh/authorized_keys. Relies on /proc (Linux) and the sshd auth log
+# ("Accepted publickey ... SHA256:<fp>"). The session running this script is
+# always excluded so we never disconnect ourselves mid-command.
+_PRUNE_SESSIONS_SCRIPT = r'''
+set -u
+
+target_user="$(whoami)"
+auth_keys="$HOME/.ssh/authorized_keys"
+
+if [ "$(id -u)" -ne 0 ]; then
+    if sudo -n true 2>/dev/null; then
+        SUDO="sudo -n"
+    else
+        echo "NEED_ROOT"
+        exit 0
+    fi
+else
+    SUDO=""
+fi
+
+if [ -s "$auth_keys" ]; then
+    authorized_fps="$(ssh-keygen -lf "$auth_keys" 2>/dev/null | awk '{print $2}')"
+else
+    authorized_fps=""
+fi
+
+# Collect the sshd ancestor PIDs of this very process so we never kill ourselves.
+exclude_pids=" "
+p=$$
+i=0
+while [ "$p" -gt 1 ] && [ "$i" -lt 40 ]; do
+    i=$((i + 1))
+    comm="$(cat "/proc/$p/comm" 2>/dev/null || true)"
+    case "$comm" in
+        sshd|sshd-session) exclude_pids="$exclude_pids$p " ;;
+    esac
+    p="$(awk '/^PPid:/{print $2}' "/proc/$p/status" 2>/dev/null)"
+    [ -z "$p" ] && break
+done
+
+tmpd="$(mktemp -d)"
+trap 'rm -rf "$tmpd"' EXIT
+
+# Gather "Accepted publickey" events together with their sshd PID.
+if command -v journalctl >/dev/null 2>&1; then
+    accepts="$($SUDO journalctl -b --no-pager _COMM=sshd _COMM=sshd-session 2>/dev/null | grep 'Accepted publickey' || true)"
+else
+    accepts=""
+    for f in /var/log/auth.log /var/log/auth.log.1 /var/log/secure /var/log/secure.1; do
+        [ -f "$f" ] || continue
+        more="$($SUDO grep 'Accepted publickey' "$f" 2>/dev/null || true)"
+        accepts="$accepts
+$more"
+    done
+fi
+
+# Record the most recent fingerprint seen per PID (last write wins). Read from
+# a file (not a pipe) so the loop runs in this shell, not a subshell.
+accepts_file="$tmpd/.accepts"
+printf '%s\n' "$accepts" > "$accepts_file"
+while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    pid="$(printf '%s\n' "$line" | sed -nE 's/.*sshd(-session)?\[([0-9]+)\]:.*/\2/p')"
+    [ -n "$pid" ] || continue
+    luser="$(printf '%s\n' "$line" | sed -nE 's/.*Accepted publickey for (invalid user )?([^ ]+) from .*/\2/p')"
+    fp="$(printf '%s\n' "$line" | sed -nE 's|.*(SHA256:[A-Za-z0-9+/=]+).*|\1|p')"
+    [ -n "$fp" ] || continue
+    [ "$luser" = "$target_user" ] || continue
+    printf '%s\n' "$fp" > "$tmpd/$pid"
+done < "$accepts_file"
+
+killed=0
+for pidfile in "$tmpd"/*; do
+    [ -e "$pidfile" ] || continue
+    p="$(basename "$pidfile")"
+    fp="$(cat "$pidfile")"
+    # Key still authorized? keep the session.
+    if [ -n "$authorized_fps" ] && printf '%s\n' "$authorized_fps" | grep -qxF "$fp"; then
+        continue
+    fi
+    # Our own session? never kill it, just flag it.
+    case "$exclude_pids" in
+        *" $p "*)
+            echo "SELF_UNAUTHORIZED $p $fp"
+            continue
+            ;;
+    esac
+    $SUDO kill -0 "$p" 2>/dev/null || continue
+    if $SUDO kill -TERM "$p" 2>/dev/null; then
+        echo "KILLED $p $fp"
+        killed=$((killed + 1))
+    else
+        echo "KILLFAIL $p $fp"
+    fi
+done
+
+echo "DONE killed=$killed"
+'''
+
+
 class Nami():
     def __init__(self, config_dir="~/.nami"):
         self.config_dir = Path(config_dir).expanduser()
@@ -382,6 +484,149 @@ class Nami():
         except Exception as e:
             return (name, False, str(e))
 
+    def _replace_keys_on_instance(self, name, keys_content):
+        """Overwrite an instance's ``authorized_keys`` with *keys_content*."""
+        config = self.config.get("instances", {}).get(name)
+        if not config:
+            return (name, False, "Instance not found")
+
+        host = config["host"]
+        user = config["user"]
+        port = config.get("port")
+
+        ssh_cmd = ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "BatchMode=yes"]
+        if port is not None:
+            ssh_cmd.extend(["-p", str(port)])
+        ssh_cmd.append(f"{user}@{host}")
+
+        # base64-encode the content locally and decode it remotely so that
+        # arbitrary key material (spaces, quotes, comments) survives transport.
+        encoded = base64.b64encode(keys_content.encode()).decode()
+        remote_cmd = textwrap.dedent(f'''
+            set -e
+            mkdir -p ~/.ssh
+            chmod 700 ~/.ssh
+            printf '%s' '{encoded}' | base64 -d > ~/.ssh/authorized_keys
+            chmod 600 ~/.ssh/authorized_keys
+            echo "REPLACED"
+        ''')
+
+        try:
+            result = subprocess.run(
+                ssh_cmd + [remote_cmd],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            if result.returncode != 0:
+                return (name, False, f"SSH command failed: {result.stderr.strip()}")
+            if "REPLACED" in result.stdout:
+                return (name, True, None)
+            return (name, False, f"Unexpected output: {result.stdout.strip()}")
+        except subprocess.TimeoutExpired:
+            return (name, False, "Connection timed out")
+        except Exception as e:
+            return (name, False, str(e))
+
+    def _prune_sessions_on_instance(self, name):
+        """Terminate sessions on *name* whose key is not in authorized_keys.
+
+        Returns ``(name, success, error, killed, self_unauthorized)`` where
+        ``killed`` is a list of ``(pid, fingerprint)`` tuples.
+        """
+        config = self.config.get("instances", {}).get(name)
+        if not config:
+            return (name, False, "Instance not found", [], False)
+
+        host = config["host"]
+        user = config["user"]
+        port = config.get("port")
+
+        ssh_cmd = ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "BatchMode=yes"]
+        if port is not None:
+            ssh_cmd.extend(["-p", str(port)])
+        ssh_cmd.append(f"{user}@{host}")
+
+        try:
+            result = subprocess.run(
+                ssh_cmd + [_PRUNE_SESSIONS_SCRIPT],
+                capture_output=True,
+                text=True,
+                timeout=60
+            )
+        except subprocess.TimeoutExpired:
+            return (name, False, "Connection timed out", [], False)
+        except Exception as e:
+            return (name, False, str(e), [], False)
+
+        out = result.stdout or ""
+        if "NEED_ROOT" in out:
+            return (name, False,
+                    "Requires root or passwordless sudo to read auth logs and terminate sessions",
+                    [], False)
+        if "DONE" not in out:
+            err = result.stderr.strip() or out.strip() or "no output"
+            return (name, False, f"SSH command failed: {err}", [], False)
+
+        killed = []
+        self_unauthorized = False
+        for line in out.splitlines():
+            line = line.strip()
+            if line.startswith("KILLED "):
+                parts = line.split()
+                killed.append((parts[1], parts[2] if len(parts) > 2 else ""))
+            elif line.startswith("SELF_UNAUTHORIZED"):
+                self_unauthorized = True
+        return (name, True, None, killed, self_unauthorized)
+
+    def kill_unauthorized_sessions(self, instance_name=None):
+        """Terminate active SSH sessions whose key is absent from authorized_keys.
+
+        Only the connecting user's sessions are considered (that user's
+        authorized_keys is the reference). The current session is never killed.
+        """
+        if instance_name is None:
+            instances = list(self.config["instances"].keys())
+        else:
+            instances = [instance_name]
+
+        if not instances:
+            print("No instances configured.")
+            return
+
+        print("🔪 Terminating SSH sessions whose key is not in authorized_keys...")
+        results = {}
+        with ThreadPoolExecutor(max_workers=30) as executor:
+            future_to_name = {
+                executor.submit(self._prune_sessions_on_instance, n): n
+                for n in instances
+            }
+            for future in as_completed(future_to_name):
+                name, success, error, killed, self_unauth = future.result()
+                results[name] = (success, error, killed, self_unauth)
+
+        total_killed = 0
+        for name in instances:
+            success, error, killed, self_unauth = results.get(
+                name, (False, "Unknown error", [], False)
+            )
+            if success:
+                if killed:
+                    print(f"✅ Terminated {len(killed)} session(s) on {name}:")
+                    for pid, fp in killed:
+                        print(f"     • pid {pid} ({fp or 'unknown key'})")
+                    total_killed += len(killed)
+                else:
+                    print(f"ℹ️  No unauthorized sessions on {name}")
+                if self_unauth:
+                    print(f"   ⚠️  This session's own key is not in authorized_keys on {name}; "
+                          f"it was kept alive, but future logins with it will be denied.")
+            else:
+                print(f"❌ Failed to prune sessions on {name}: {error}")
+
+        if total_killed > 0:
+            print(f"\n🔪 Total: terminated {total_killed} session(s) across {len(instances)} instance(s)")
+
     def _remove_key_from_instance(self, name, pattern):
         """Remove SSH key(s) matching pattern from an instance's authorized_keys."""
         config = self.config.get("instances", {}).get(name)
@@ -475,7 +720,7 @@ class Nami():
         if total_removed > 0:
             print(f"\n🔑 Total: Removed {total_removed} key(s) across {len(instances)} instance(s)")
 
-    def add_ssh_key(self, public_keys, instance_name=None):
+    def add_ssh_key(self, public_keys, instance_name=None, replace=False, kill_sessions=False):
         if instance_name is None:
             instances = list(self.config["instances"].keys())
         else:
@@ -485,10 +730,38 @@ class Nami():
             print("No instances configured.")
             return
         
+        key_count = len(public_keys)
+        label = f"{key_count} SSH key(s)" if key_count != 1 else "SSH key"
+
+        if replace:
+            scope = instance_name if instance_name else f"ALL ({len(instances)}) instances"
+            print(f"⚠️  Replacing the entire authorized_keys on {scope} with {label}.")
+            keys_content = "".join(key.strip() + "\n" for key in public_keys)
+
+            results = {}
+            with ThreadPoolExecutor(max_workers=30) as executor:
+                future_to_name = {
+                    executor.submit(self._replace_keys_on_instance, n, keys_content): n
+                    for n in instances
+                }
+                for future in as_completed(future_to_name):
+                    name, success, error = future.result()
+                    results[name] = (success, error)
+
+            for name in instances:
+                success, error = results.get(name, (False, "Unknown error"))
+                if success:
+                    print(f"✅ Replaced authorized_keys with {label} on {name}")
+                else:
+                    print(f"❌ Failed to replace authorized_keys on {name}: {error}")
+
+            if kill_sessions:
+                self.kill_unauthorized_sessions(instance_name)
+            return
+
         import tempfile
         import os
         
-        key_count = len(public_keys)
         with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.pub') as tmp:
             for key in public_keys:
                 tmp.write(key.strip() + '\n')
@@ -506,13 +779,15 @@ class Nami():
         
         os.unlink(tmp_filename)
         
-        label = f"{key_count} SSH key(s)" if key_count > 1 else "SSH key"
         for name in instances:
             success, error = results.get(name, (False, "Unknown error"))
             if success:
                 print(f"✅ Added {label} to {name}")
             else:
                 print(f"❌ Failed to add {label} to {name}: {error}")
+
+        if kill_sessions:
+            self.kill_unauthorized_sessions(instance_name)
 
 
 # -----------------------------------------------------------------------------
@@ -567,10 +842,15 @@ def main():
     ssh_key_add_parser.add_argument("public_keys", nargs="*", help="One or more public key strings to add")
     ssh_key_add_parser.add_argument("--from-file", dest="from_file", help="Read public keys from a file (one key per line)")
     ssh_key_add_parser.add_argument("--instance", help="Specific instance name (if not provided, add to all)")
+    ssh_key_add_parser.add_argument("--replace", action="store_true", help="Replace the entire authorized_keys with the provided key(s) instead of appending")
+    ssh_key_add_parser.add_argument("--kill-sessions", dest="kill_sessions", action="store_true", help="After updating keys, terminate active SSH sessions whose key is no longer in authorized_keys")
     
     ssh_key_remove_parser = ssh_key_subparsers.add_parser("remove", help="Remove SSH key(s) matching a pattern from instance(s)")
     ssh_key_remove_parser.add_argument("pattern", help="Pattern to match (e.g., email, username, or part of the key)")
     ssh_key_remove_parser.add_argument("--instance", help="Specific instance name (if not provided, remove from all)")
+
+    ssh_key_prune_parser = ssh_key_subparsers.add_parser("prune-sessions", help="Terminate active SSH sessions whose key is not in authorized_keys")
+    ssh_key_prune_parser.add_argument("--instance", help="Specific instance name (if not provided, prune on all)")
     
     # Unified transfer command
     transfer_parser = subparsers.add_parser("transfer", help="Transfer data between instances")
@@ -679,11 +959,13 @@ def main():
             if not keys:
                 print("❌ No keys provided. Pass keys as arguments or use --from-file.")
                 sys.exit(1)
-            vm.add_ssh_key(keys, args.instance)
+            vm.add_ssh_key(keys, args.instance, replace=args.replace, kill_sessions=args.kill_sessions)
         elif args.ssh_key_action == "remove":
             vm.remove_ssh_key(args.pattern, args.instance)
+        elif args.ssh_key_action == "prune-sessions":
+            vm.kill_unauthorized_sessions(args.instance)
         else:
-            print(f"❌ Unknown ssh-key action: {args.ssh_key_action}. Available: add, remove")
+            print(f"❌ Unknown ssh-key action: {args.ssh_key_action}. Available: add, remove, prune-sessions")
     elif args.command == "transfer":
         if args.method == "rsync":
             rsync.transfer_via_rsync(
