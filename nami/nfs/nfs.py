@@ -8,8 +8,9 @@ from typing import Dict, Tuple, List
 
 from ..connection import SystemSSHConnection as Connection
 
-_SSH_RETRIES = 4
+_SSH_RETRIES = 6
 _SSH_RETRY_BASE_DELAY = 3
+_SSH_RETRY_MAX_DELAY = 20
 
 
 def _sanitize_name_for_path(name: str) -> str:
@@ -21,15 +22,19 @@ def _sanitize_name_for_path(name: str) -> str:
 
 
 def _run_with_ssh_retry(func):
-    """Retry on transient SSH failures (e.g. MaxStartups exceeded)."""
+    """Retry on transient SSH failures (MaxStartups, connect timeouts, resets…).
+
+    Uses exponential backoff with jitter (capped at ``_SSH_RETRY_MAX_DELAY``) so
+    that a burst of concurrent sessions spreads out instead of retrying in lockstep.
+    """
     for attempt in range(_SSH_RETRIES):
         try:
             return func()
-        except Exception as e:
-            if attempt < _SSH_RETRIES - 1 and "kex_exchange_identification" in str(e):
-                time.sleep(_SSH_RETRY_BASE_DELAY * (2 ** attempt) + random.uniform(0, 2))
-                continue
-            raise
+        except Exception:
+            if attempt >= _SSH_RETRIES - 1:
+                raise
+            delay = min(_SSH_RETRY_BASE_DELAY * (2 ** attempt), _SSH_RETRY_MAX_DELAY)
+            time.sleep(delay + random.uniform(0, 2))
 
 
 def _mount_peer(
@@ -108,6 +113,9 @@ def _setup_server_export(
 ) -> Tuple[str, bool, str, str]:
     """Ensure NFS server is installed and export_dir is exported on instance.
 
+    The export is restricted to the explicit ``peer_ips`` (never ``*``), so the
+    NFS server itself enforces who may mount, regardless of firewall state.
+
     Also opens TCP port 2049 in ufw (if active) for each peer IP so that
     cross-instance NFS mounts are not blocked by host firewalls.
     """
@@ -150,6 +158,9 @@ def _setup_server_export(
         done
 
         # Build /etc/exports:
+        #   - Exports are restricted to the explicit peer IP list (never "*"),
+        #     so the NFS server itself enforces who may mount — independent of
+        #     any host/provider firewall (which may be inactive).
         #   - Root export gets fsid=0 (required for NFSv4 pseudo-root).
         #   - Every block-device-backed sub-mount gets an explicit export with a
         #     unique fsid.  This is necessary because bind mounts on the same
@@ -158,17 +169,31 @@ def _setup_server_export(
         #   - Only /dev/* sources are exported; this automatically excludes
         #     virtual filesystems (proc, sysfs, tmpfs, hugetlbfs, …) and
         #     NFS client mounts (which would create circular re-exports).
+        PEERS="{peer_ips_str}"
         sudo sed -i "\|^${{EXPORT_DIR}}[[:space:]]|d" /etc/exports
         sudo sed -i "/# nami-nfs/d" /etc/exports
-        echo "$EXPORT_DIR *(rw,sync,no_subtree_check,no_root_squash,crossmnt,fsid=0) # nami-nfs" | sudo tee -a /etc/exports >/dev/null
 
-        FSID_COUNTER=1
-        while read MNT SRC; do
-            case "$SRC" in /dev/*) ;; *) continue ;; esac
-            echo "$MNT *(rw,sync,no_subtree_check,no_root_squash,fsid=$FSID_COUNTER) # nami-nfs" | sudo tee -a /etc/exports >/dev/null
-            echo "NFS: exporting sub-mount $MNT (fsid=$FSID_COUNTER)"
-            FSID_COUNTER=$((FSID_COUNTER + 1))
-        done < <(findmnt -Rrn -o TARGET,SOURCE "$EXPORT_DIR" | tail -n +2)
+        if [ -z "$PEERS" ]; then
+            echo "NFS: no peer IPs provided; refusing to create a world-open export" >&2
+        else
+            ROOT_CLIENTS=""
+            for IP in $PEERS; do
+                ROOT_CLIENTS="$ROOT_CLIENTS ${{IP}}(rw,sync,no_subtree_check,no_root_squash,crossmnt,fsid=0)"
+            done
+            echo "$EXPORT_DIR$ROOT_CLIENTS # nami-nfs" | sudo tee -a /etc/exports >/dev/null
+
+            FSID_COUNTER=1
+            while read MNT SRC; do
+                case "$SRC" in /dev/*) ;; *) continue ;; esac
+                SUB_CLIENTS=""
+                for IP in $PEERS; do
+                    SUB_CLIENTS="$SUB_CLIENTS ${{IP}}(rw,sync,no_subtree_check,no_root_squash,fsid=$FSID_COUNTER)"
+                done
+                echo "$MNT$SUB_CLIENTS # nami-nfs" | sudo tee -a /etc/exports >/dev/null
+                echo "NFS: exporting sub-mount $MNT (fsid=$FSID_COUNTER)"
+                FSID_COUNTER=$((FSID_COUNTER + 1))
+            done < <(findmnt -Rrn -o TARGET,SOURCE "$EXPORT_DIR" | tail -n +2)
+        fi
 
         sudo systemctl stop nfs-kernel-server
         sudo exportfs -f

@@ -8,6 +8,14 @@ import sys
 
 CHUNK_SIZE = 32*1024
 
+# SSH connection tuning for non-interactive (capture) commands.
+# ConnectTimeout is generous because many parallel sessions to the same host
+# (e.g. NFS full-mesh) can momentarily exceed sshd's MaxStartups and delay the
+# TCP/SSH handshake; a short timeout turns those transient delays into failures.
+_SSH_CONNECT_TIMEOUT = 30
+_SSH_SERVER_ALIVE_INTERVAL = 15
+_SSH_SERVER_ALIVE_COUNT = 6
+
 
 class SystemSSHConnection:
     """Lightweight SSH helper that shells out to the local ``ssh`` binary.
@@ -163,7 +171,12 @@ class SystemSSHConnection:
         ssh_tty_flag = "-T" if capture else "-tt"
         base_without_ssh = self._base_cmd[1:-1]  # drop leading 'ssh' and trailing 'user@host'
         host = self._base_cmd[-1]
-        extra_opts = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=3"] if capture else []
+        extra_opts = [
+            "-o", "BatchMode=yes",
+            "-o", f"ConnectTimeout={_SSH_CONNECT_TIMEOUT}",
+            "-o", f"ServerAliveInterval={_SSH_SERVER_ALIVE_INTERVAL}",
+            "-o", f"ServerAliveCountMax={_SSH_SERVER_ALIVE_COUNT}",
+        ] if capture else []
         full_cmd = ["ssh", ssh_tty_flag] + base_without_ssh + extra_opts + [host, remote_cmd]
         return full_cmd, cmd_clean
 
