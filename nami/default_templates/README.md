@@ -11,6 +11,8 @@ This directory contains the default command templates.
 - **sync_from_s3.bash** - Download data from S3
 - **rsync_upload.bash** - Upload data via rsync
 - **rsync_download.bash** - Download data via rsync
+- **bind_dir.bash** - Relocate a directory onto another disk via bind-mount (with rollback/cleanup)
+- **consolidate_bigdisk.bash** - Restore the big-disk convention on a drifted node: fold stranded data onto the pool, remount it at `/media/16TBNVME`, and bind it onto `/workspace`
 
 ## Template Format
 

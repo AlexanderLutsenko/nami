@@ -58,29 +58,56 @@ def _mount_peer(
     script = f'''
         set -euo pipefail
         MOUNT_DIR="{mount_dir}"
-        PEER_SPEC="{peer_ip}:{export_dir}"
+        # The server exports {export_dir} as the NFSv4 pseudo-root (fsid=0), so the
+        # share is reachable at the v4 root ("/") — NOT at its real path. Mounting
+        # "{peer_ip}:{export_dir}" would be resolved relative to that pseudo-root
+        # (i.e. {export_dir}{export_dir}) and fail with "No such file or directory".
+        # Always mount the pseudo-root; crossmnt makes sub-mounts traversable below it.
+        PEER_SPEC="{peer_ip}:/"
+
+        # Is MOUNT_DIR present in the kernel mount table? This reads /proc/mounts
+        # instead of touching the path, so it still reports correctly when the
+        # existing mount is a STALE NFS handle — a state in which ls/mkdir/mountpoint
+        # would themselves error out with "Stale file handle".
+        is_mounted() {{
+            awk -v d="$MOUNT_DIR" '$2 == d {{ found = 1 }} END {{ exit !found }}' /proc/mounts
+        }}
+
+        # Force-unmount any existing mount(s) at MOUNT_DIR, including stale handles
+        # and stacked mounts, falling back to a lazy detach. Loops because a path
+        # can carry more than one mount.
+        unmount_all() {{
+            local tries=0
+            while is_mounted; do
+                sudo umount -f "$MOUNT_DIR" 2>/dev/null \\
+                    || sudo umount -l "$MOUNT_DIR" 2>/dev/null \\
+                    || true
+                tries=$((tries + 1))
+                [ "$tries" -ge 5 ] && break
+                sleep 1
+            done
+        }}
 
         # If real dir is non-empty and not a mountpoint → do nothing to avoid masking data
-        if [ -d "$MOUNT_DIR" ] && [ "$(ls -A \"$MOUNT_DIR\" 2>/dev/null)" ] && ! mountpoint -q "$MOUNT_DIR"; then
+        if ! is_mounted && [ -d "$MOUNT_DIR" ] && [ -n "$(ls -A "$MOUNT_DIR" 2>/dev/null)" ]; then
             echo "Skip: $MOUNT_DIR exists and is not empty";
             exit 0
         fi
 
-        sudo mkdir -p "$MOUNT_DIR"
+        # Always unmount first (even stale handles) BEFORE mkdir, so that mkdir
+        # can't fail with "Stale file handle" and so the fresh mount picks up
+        # server-side export changes (e.g. reassigned fsids after a re-export).
+        unmount_all
 
-        # Always do a full unmount + mount cycle to pick up server-side export changes
-        if mountpoint -q "$MOUNT_DIR" 2>/dev/null; then
-            sudo umount -f "$MOUNT_DIR" 2>/dev/null || sudo umount -l "$MOUNT_DIR" 2>/dev/null || true
-            sleep 1
-        fi
+        sudo mkdir -p "$MOUNT_DIR"
         sudo mount -t nfs -o {nfs_opts} "$PEER_SPEC" "$MOUNT_DIR"
 
         # Update fstab: remove any line for this mountpoint, then append the current spec
         if [ -f /etc/fstab ]; then
             sudo sed -i "\\| {mount_dir} nfs |d" /etc/fstab
         fi
-        if ! grep -qsF "{peer_ip}:{export_dir} {mount_dir} nfs" /etc/fstab 2>/dev/null; then
-            echo "{peer_ip}:{export_dir} {mount_dir} nfs {nfs_opts},_netdev 0 0" | sudo tee -a /etc/fstab >/dev/null
+        if ! grep -qsF "{peer_ip}:/ {mount_dir} nfs" /etc/fstab 2>/dev/null; then
+            echo "{peer_ip}:/ {mount_dir} nfs {nfs_opts},_netdev 0 0" | sudo tee -a /etc/fstab >/dev/null
         fi
         sudo systemctl daemon-reload || true
 
